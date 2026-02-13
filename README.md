@@ -1,6 +1,6 @@
 # DevOps Ease Access
 
-Accessible Azure DevOps observability starter application with:
+Accessible Azure DevOps observability starter application (PAT authentication) with:
 
 - Secure PAT-based Azure DevOps connectivity
 - Project and pipeline dashboards
@@ -36,10 +36,12 @@ npm run dev
 
 Open `http://localhost:4173`.
 
-## Security Notes
+## Security Notes (PAT Mode)
 
+- PAT is the active authentication mode for this version.
 - PAT never touches browser storage in this starter.
 - PAT is encrypted in backend volatile memory using `APP_ENCRYPTION_KEY`.
-- Use HTTPS, short token lifetimes, and secret managers in production.
+- Use least-privilege PAT scopes, short token lifetimes, HTTPS, and secret managers in production.
+- Copy `backend/.env.example` to `backend/.env` and set `APP_ENCRYPTION_KEY`.
 
 See `docs/architecture.md` for full design and deployment guidance.
