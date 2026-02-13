@@ -164,14 +164,33 @@ async def error_intelligence(project: str, pipeline_id: int, session_id: str, ru
             timeline = await client.timeline(project, build_id)
             failed_records = [r for r in timeline.get("records", []) if r.get("result") == "failed"]
             if failed_records:
-                best = failed_records[0]
-                failed_task = best.get("name", failed_task)
+                # Prefer failed task records with explicit issues; avoid stage/job wrappers
+                # like "__default" whenever a concrete failed task exists.
+                prioritized = sorted(
+                    failed_records,
+                    key=lambda r: (
+                        0 if r.get("type") == "Task" else 1,
+                        0 if (r.get("issues") or []) else 1,
+                        0 if (r.get("errorCount") or 0) > 0 else 1,
+                    ),
+                )
+                best = prioritized[0]
+
+                task_obj = best.get("task") or {}
+                task_name = task_obj.get("name")
+                display_name = best.get("name")
+                ref_name = best.get("refName")
+                failed_task = task_name or display_name or ref_name or failed_task
+
                 issues = best.get("issues") or []
-                if issues:
+                error_issues = [i for i in issues if i.get("type") == "error"]
+                if error_issues:
+                    message = error_issues[0].get("message", message)
+                elif issues:
                     message = issues[0].get("message", message)
                 else:
-                    # Fallback: use any textual hints available on the failed record.
-                    message = best.get("resultCode") or best.get("name") or message
+                    # Fallback to timeline metadata if issues are absent.
+                    message = best.get("resultCode") or best.get("currentOperation") or display_name or message
         except Exception:
             pass
 
