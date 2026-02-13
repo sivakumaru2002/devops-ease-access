@@ -33,6 +33,8 @@ type FailedRun = {
   error_message: string;
   timestamp: string;
   logs_summary: string;
+  task_type?: string;
+  log_id?: number;
 };
 
 type ErrorIntelligenceResponse = {
@@ -249,10 +251,16 @@ function App() {
         return;
       }
 
+      const logUrl = matched.log_id
+        ? `https://dev.azure.com/${organization}/${encodeURIComponent(selectedProject)}/_apis/build/builds/${run.id}/logs/${matched.log_id}?api-version=7.1-preview.2`
+        : 'N/A';
       setModalErrorText(
         `Failed task: ${matched.failed_task}
+Task type: ${matched.task_type ?? 'Unknown'}
 Error: ${matched.error_message}
 Timestamp: ${matched.timestamp}
+Log ID: ${matched.log_id ?? 'N/A'}
+Log API: ${logUrl}
 Logs summary: ${matched.logs_summary}`,
       );
       setModalExplanationText(
