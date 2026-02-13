@@ -120,12 +120,27 @@ async def pipeline_runs(project: str, pipeline_id: int, session_id: str) -> list
 
 
 @app.get("/api/projects/{project}/pipelines/{pipeline_id}/error-intelligence")
-async def error_intelligence(project: str, pipeline_id: int, session_id: str) -> dict:
+async def error_intelligence(project: str, pipeline_id: int, session_id: str, run_id: int | None = None) -> dict:
     session = _get_session(session_id)
     client = AzureDevOpsClient(session["organization"], decrypt_secret(session["encrypted_pat"]))
 
     runs = await client.list_pipeline_runs(project, pipeline_id)
     failed_runs = [r for r in runs if r.get("result") == "failed"]
+
+    if run_id is not None:
+        target = next((r for r in runs if r.get("id") == run_id), None)
+        if not target:
+            raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
+        if target.get("result") != "failed":
+            return {
+                "pipeline_id": pipeline_id,
+                "pipeline_name": target.get("pipeline", {}).get("name", str(pipeline_id)),
+                "status": "All Builds Successful",
+                "failure_summary": {},
+                "failed_runs": [],
+                "ai_summary": None,
+            }
+        failed_runs = [target]
 
     if not failed_runs:
         return {
@@ -140,18 +155,23 @@ async def error_intelligence(project: str, pipeline_id: int, session_id: str) ->
     collected = []
     summary = Counter()
 
-    for run in failed_runs[:10]:
+    for run in failed_runs[:20]:
         build_id = run.get("id")
         failed_task = "Unknown Task"
         message = "No error detail available"
 
         try:
             timeline = await client.timeline(project, build_id)
-            for rec in timeline.get("records", []):
-                if rec.get("result") == "failed":
-                    failed_task = rec.get("name", failed_task)
-                    message = rec.get("issues", [{}])[0].get("message", message)
-                    break
+            failed_records = [r for r in timeline.get("records", []) if r.get("result") == "failed"]
+            if failed_records:
+                best = failed_records[0]
+                failed_task = best.get("name", failed_task)
+                issues = best.get("issues") or []
+                if issues:
+                    message = issues[0].get("message", message)
+                else:
+                    # Fallback: use any textual hints available on the failed record.
+                    message = best.get("resultCode") or best.get("name") or message
         except Exception:
             pass
 
