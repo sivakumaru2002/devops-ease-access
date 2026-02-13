@@ -232,7 +232,7 @@ function App() {
 
     try {
       const response = await fetch(
-        `${API}/api/projects/${encodeURIComponent(selectedProject)}/pipelines/${pipeline.id}/error-intelligence?session_id=${sessionId}`,
+        `${API}/api/projects/${encodeURIComponent(selectedProject)}/pipelines/${pipeline.id}/error-intelligence?session_id=${sessionId}&run_id=${run.id}`,
       );
       const insight = (await response.json()) as ErrorIntelligenceResponse;
 
