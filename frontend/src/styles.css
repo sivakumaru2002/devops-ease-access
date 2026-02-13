@@ -158,6 +158,32 @@ th, td {
 .stack-ok { background: linear-gradient(90deg, #2fd39b, #17b47f); }
 .stack-fail { background: linear-gradient(90deg, #ff8b8b, #ff6e6e); }
 
+.pipeline-accordion {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.pipeline-item {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #0e172d;
+  padding: 0.4rem 0.6rem;
+}
+
+.pipeline-item summary {
+  cursor: pointer;
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: center;
+  padding: 0.3rem 0;
+}
+
+.loader {
+  color: #9ed0ff;
+  font-weight: 600;
+}
+
 .muted { color: var(--muted); }
 
 .modal {
@@ -171,25 +197,16 @@ th, td {
   padding: 1rem;
 }
 
-.modal-section {
-  margin-bottom: 0.8rem;
-}
-
 .modal-pre {
   white-space: pre-wrap;
   word-break: break-word;
   overflow-wrap: anywhere;
-  max-height: 220px;
+  max-height: 260px;
   overflow: auto;
   background: #0a1225;
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 0.6rem;
-}
-
-.modal-table-wrap {
-  max-height: 260px;
-  overflow: auto;
 }
 
 @media (max-width: 900px) {

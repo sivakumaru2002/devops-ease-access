@@ -27,7 +27,8 @@ type PipelineRun = {
   finishedDate?: string;
 };
 
-type FailureRun = {
+type FailedRun = {
+  run_id: number;
   failed_task: string;
   error_message: string;
   timestamp: string;
@@ -37,7 +38,7 @@ type FailureRun = {
 type ErrorIntelligenceResponse = {
   status: string;
   ai_summary: string | null;
-  failed_runs: FailureRun[];
+  failed_runs: FailedRun[];
 };
 
 type Analytics = {
@@ -126,14 +127,17 @@ function App() {
 
   const [pipelines, setPipelines] = useState<Pipeline[]>([]);
   const [analytics, setAnalytics] = useState<Analytics | null>(null);
+  const [pipelineRuns, setPipelineRuns] = useState<Record<number, PipelineRun[]>>({});
 
   const [isConnecting, setIsConnecting] = useState(false);
   const [isLoadingProject, setIsLoadingProject] = useState(false);
+  const [isLoadingDashboard, setIsLoadingDashboard] = useState(false);
+  const [loadingRunsByPipeline, setLoadingRunsByPipeline] = useState<Record<number, boolean>>({});
 
   const [modalOpen, setModalOpen] = useState(false);
-  const [modalTitle, setModalTitle] = useState('Pipeline Details');
+  const [modalTitle, setModalTitle] = useState('Failure Explanation');
   const [modalInsight, setModalInsight] = useState('');
-  const [modalRuns, setModalRuns] = useState<PipelineRun[]>([]);
+  const [isLoadingExplanation, setIsLoadingExplanation] = useState(false);
 
   const filteredProjects = useMemo(
     () => projects.filter((p) => p.name.toLowerCase().includes(projectSearch.toLowerCase())),
@@ -176,62 +180,78 @@ function App() {
     if (!sessionId) return;
     setSelectedProject(projectName);
     setIsLoadingProject(true);
+    setIsLoadingDashboard(true);
     setStatus(`Loading dashboard for ${projectName}...`);
 
     try {
-      const pipelinesResponse = await fetch(
-        `${API}/api/projects/${encodeURIComponent(projectName)}/pipelines?session_id=${sessionId}`,
-      );
+      const [pipelinesResponse, analyticsResponse] = await Promise.all([
+        fetch(`${API}/api/projects/${encodeURIComponent(projectName)}/pipelines?session_id=${sessionId}`),
+        fetch(`${API}/api/projects/${encodeURIComponent(projectName)}/analytics?session_id=${sessionId}`),
+      ]);
+
       const pipelinesPayload = (await pipelinesResponse.json()) as Pipeline[];
-      setPipelines(pipelinesPayload);
-
-      const analyticsResponse = await fetch(
-        `${API}/api/projects/${encodeURIComponent(projectName)}/analytics?session_id=${sessionId}`,
-      );
       const analyticsPayload = (await analyticsResponse.json()) as Analytics;
-      setAnalytics(analyticsPayload);
 
+      setPipelines(pipelinesPayload);
+      setAnalytics(analyticsPayload);
+      setPipelineRuns({});
       setStep('dashboard');
       setStatus(`Loaded dashboard for ${projectName}.`);
     } catch {
       setStatus('Could not load project dashboard. Please try again.');
     } finally {
       setIsLoadingProject(false);
+      setIsLoadingDashboard(false);
     }
   };
 
-  const openPipelineModal = async (pipeline: Pipeline) => {
+  const loadRunsForPipeline = async (pipelineId: number) => {
+    if (!sessionId || !selectedProject || pipelineRuns[pipelineId]) return;
+
+    setLoadingRunsByPipeline((prev) => ({ ...prev, [pipelineId]: true }));
+    try {
+      const response = await fetch(
+        `${API}/api/projects/${encodeURIComponent(selectedProject)}/pipelines/${pipelineId}/runs?session_id=${sessionId}`,
+      );
+      const runs = (await response.json()) as PipelineRun[];
+      setPipelineRuns((prev) => ({ ...prev, [pipelineId]: runs }));
+    } finally {
+      setLoadingRunsByPipeline((prev) => ({ ...prev, [pipelineId]: false }));
+    }
+  };
+
+  const explainRunFailure = async (pipeline: Pipeline, run: PipelineRun) => {
     if (!sessionId || !selectedProject) return;
 
-    setModalTitle(`Pipeline Details · ${pipeline.name}`);
-    setModalInsight('Loading insight and run history...');
-    setModalRuns([]);
+    setModalTitle(`Failure Explanation · ${pipeline.name} · Run ${run.id}`);
+    setModalInsight('Loading failure explanation...');
+    setIsLoadingExplanation(true);
     setModalOpen(true);
 
     try {
-      const [insightRes, runsRes] = await Promise.all([
-        fetch(
-          `${API}/api/projects/${encodeURIComponent(selectedProject)}/pipelines/${pipeline.id}/error-intelligence?session_id=${sessionId}`,
-        ),
-        fetch(
-          `${API}/api/projects/${encodeURIComponent(selectedProject)}/pipelines/${pipeline.id}/runs?session_id=${sessionId}`,
-        ),
-      ]);
-
-      const insight = (await insightRes.json()) as ErrorIntelligenceResponse;
-      const runs = (await runsRes.json()) as PipelineRun[];
-      setModalRuns(runs);
+      const response = await fetch(
+        `${API}/api/projects/${encodeURIComponent(selectedProject)}/pipelines/${pipeline.id}/error-intelligence?session_id=${sessionId}`,
+      );
+      const insight = (await response.json()) as ErrorIntelligenceResponse;
 
       if (insight.status === 'All Builds Successful') {
-        setModalInsight('All Builds Successful');
-      } else {
-        const first = insight.failed_runs[0];
-        setModalInsight(
-          `Failed task: ${first.failed_task}\nError: ${first.error_message}\nTimestamp: ${first.timestamp}\nLogs summary: ${first.logs_summary}\nAI Summary: ${insight.ai_summary ?? 'AI not configured'}`,
-        );
+        setModalInsight('This pipeline currently reports all builds successful.');
+        return;
       }
+
+      const matched = insight.failed_runs.find((f) => f.run_id === run.id);
+      if (!matched) {
+        setModalInsight('No specific error detail was found for this run.');
+        return;
+      }
+
+      setModalInsight(
+        `Failed task: ${matched.failed_task}\nError: ${matched.error_message}\nTimestamp: ${matched.timestamp}\nLogs summary: ${matched.logs_summary}\nAI Summary: ${insight.ai_summary ?? 'AI not configured'}`,
+      );
     } catch {
-      setModalInsight('Unable to load pipeline details right now.');
+      setModalInsight('Unable to load failure explanation right now.');
+    } finally {
+      setIsLoadingExplanation(false);
     }
   };
 
@@ -239,7 +259,7 @@ function App() {
     <>
       <header className="hero">
         <h1>DevOps Ease Access</h1>
-        <p>Login first, then choose a project, then view pipeline dashboard.</p>
+        <p>Login first, then choose a project, then view charts and pipeline history.</p>
       </header>
 
       <p className="status" aria-live="polite">
@@ -288,6 +308,7 @@ function App() {
               onChange={(event) => setProjectSearch(event.target.value)}
               aria-label="Search project"
             />
+            {isLoadingProject ? <p className="loader">Loading project dashboard...</p> : null}
             <ul className="project-list">
               {filteredProjects.map((project) => (
                 <li key={project.name}>
@@ -303,42 +324,9 @@ function App() {
 
       {step === 'dashboard' ? (
         <main className="dashboard-page">
-          <section className="card wide">
-            <div className="row-between">
-              <h2>Pipelines & Dashboard • {selectedProject}</h2>
-              <button className="small" onClick={() => setStep('projects')}>
-                ← Back to Projects
-              </button>
-            </div>
-
-            <div className="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Pipeline</th>
-                    <th>Status</th>
-                    <th>Result</th>
-                    <th>History</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {pipelines.map((pipeline) => (
-                    <tr key={pipeline.id}>
-                      <td>{pipeline.name}</td>
-                      <td>{pipeline.latest_status}</td>
-                      <td>{pipeline.latest_result}</td>
-                      <td>
-                        <button onClick={() => openPipelineModal(pipeline)}>View</button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </section>
-
           <section className="card wide" aria-labelledby="charts-title">
             <h2 id="charts-title">Charts</h2>
+            {isLoadingDashboard ? <p className="loader">Loading charts...</p> : null}
             {analytics ? (
               <div className="chart-grid">
                 <SuccessFailureGraph
@@ -361,45 +349,79 @@ function App() {
             )}
           </section>
 
+          <section className="card wide">
+            <div className="row-between">
+              <h2>Pipelines • {selectedProject}</h2>
+              <button className="small" onClick={() => setStep('projects')}>
+                ← Back to Projects
+              </button>
+            </div>
+
+            {pipelines.length === 0 ? <p className="muted">No pipelines found.</p> : null}
+
+            <div className="pipeline-accordion">
+              {pipelines.map((pipeline) => (
+                <details
+                  key={pipeline.id}
+                  className="pipeline-item"
+                  onToggle={(event) => {
+                    const el = event.currentTarget as HTMLDetailsElement;
+                    if (el.open) {
+                      void loadRunsForPipeline(pipeline.id);
+                    }
+                  }}
+                >
+                  <summary>
+                    <span>{pipeline.name}</span>
+                    <span className="muted">
+                      {pipeline.latest_status} · {pipeline.latest_result}
+                    </span>
+                  </summary>
+
+                  {loadingRunsByPipeline[pipeline.id] ? (
+                    <p className="loader">Loading run history...</p>
+                  ) : (
+                    <div className="table-wrap">
+                      <table>
+                        <thead>
+                          <tr>
+                            <th>Run ID</th>
+                            <th>State</th>
+                            <th>Result</th>
+                            <th>Created</th>
+                            <th>Error</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {(pipelineRuns[pipeline.id] ?? []).map((run) => (
+                            <tr key={run.id}>
+                              <td>{run.id}</td>
+                              <td>{run.state ?? '-'}</td>
+                              <td>{run.result ?? '-'}</td>
+                              <td>{run.createdDate ?? '-'}</td>
+                              <td>
+                                {run.result === 'failed' ? (
+                                  <button onClick={() => explainRunFailure(pipeline, run)}>Explain error</button>
+                                ) : (
+                                  <span className="muted">-</span>
+                                )}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </details>
+              ))}
+            </div>
+          </section>
+
           {modalOpen ? (
             <dialog open aria-labelledby="modal-title" className="modal">
               <h3 id="modal-title">{modalTitle}</h3>
-
-              <section className="modal-section">
-                <h4>Failure Insight</h4>
-                <pre className="modal-pre">{modalInsight}</pre>
-              </section>
-
-              <section className="modal-section">
-                <h4>Run History</h4>
-                {modalRuns.length === 0 ? (
-                  <p className="muted">No runs found.</p>
-                ) : (
-                  <div className="table-wrap modal-table-wrap">
-                    <table>
-                      <thead>
-                        <tr>
-                          <th>Run ID</th>
-                          <th>State</th>
-                          <th>Result</th>
-                          <th>Created</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {modalRuns.map((run) => (
-                          <tr key={run.id}>
-                            <td>{run.id}</td>
-                            <td>{run.state ?? '-'}</td>
-                            <td>{run.result ?? '-'}</td>
-                            <td>{run.createdDate ?? '-'}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </section>
-
+              {isLoadingExplanation ? <p className="loader">Loading explanation...</p> : null}
+              <pre className="modal-pre">{modalInsight}</pre>
               <button onClick={() => setModalOpen(false)}>Close</button>
             </dialog>
           ) : null}
