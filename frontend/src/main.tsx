@@ -136,7 +136,8 @@ function App() {
 
   const [modalOpen, setModalOpen] = useState(false);
   const [modalTitle, setModalTitle] = useState('Failure Explanation');
-  const [modalInsight, setModalInsight] = useState('');
+  const [modalErrorText, setModalErrorText] = useState('');
+  const [modalExplanationText, setModalExplanationText] = useState('');
   const [isLoadingExplanation, setIsLoadingExplanation] = useState(false);
 
   const filteredProjects = useMemo(
@@ -224,7 +225,8 @@ function App() {
     if (!sessionId || !selectedProject) return;
 
     setModalTitle(`Failure Explanation · ${pipeline.name} · Run ${run.id}`);
-    setModalInsight('Loading failure explanation...');
+    setModalErrorText('Loading error details...');
+    setModalExplanationText('Loading explanation...');
     setIsLoadingExplanation(true);
     setModalOpen(true);
 
@@ -235,21 +237,30 @@ function App() {
       const insight = (await response.json()) as ErrorIntelligenceResponse;
 
       if (insight.status === 'All Builds Successful') {
-        setModalInsight('This pipeline currently reports all builds successful.');
+        setModalErrorText('No error for this run. It is reported as successful.');
+        setModalExplanationText('No explanation needed because this run did not fail.');
         return;
       }
 
       const matched = insight.failed_runs.find((f) => f.run_id === run.id);
       if (!matched) {
-        setModalInsight('No specific error detail was found for this run.');
+        setModalErrorText('No specific error detail was found for this run.');
+        setModalExplanationText('The run failed, but detailed task-level error was not available.');
         return;
       }
 
-      setModalInsight(
-        `Failed task: ${matched.failed_task}\nError: ${matched.error_message}\nTimestamp: ${matched.timestamp}\nLogs summary: ${matched.logs_summary}\nAI Summary: ${insight.ai_summary ?? 'AI not configured'}`,
+      setModalErrorText(
+        `Failed task: ${matched.failed_task}
+Error: ${matched.error_message}
+Timestamp: ${matched.timestamp}
+Logs summary: ${matched.logs_summary}`,
+      );
+      setModalExplanationText(
+        insight.ai_summary ?? 'AI explanation is not configured for this environment.',
       );
     } catch {
-      setModalInsight('Unable to load failure explanation right now.');
+      setModalErrorText('Unable to load error details right now.');
+      setModalExplanationText('Unable to generate explanation right now.');
     } finally {
       setIsLoadingExplanation(false);
     }
@@ -421,7 +432,17 @@ function App() {
             <dialog open aria-labelledby="modal-title" className="modal">
               <h3 id="modal-title">{modalTitle}</h3>
               {isLoadingExplanation ? <p className="loader">Loading explanation...</p> : null}
-              <pre className="modal-pre">{modalInsight}</pre>
+
+              <section className="modal-block">
+                <h4>Error</h4>
+                <pre className="modal-pre">{modalErrorText}</pre>
+              </section>
+
+              <section className="modal-block">
+                <h4>Explanation</h4>
+                <pre className="modal-pre">{modalExplanationText}</pre>
+              </section>
+
               <button onClick={() => setModalOpen(false)}>Close</button>
             </dialog>
           ) : null}
