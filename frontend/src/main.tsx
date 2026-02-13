@@ -19,6 +19,14 @@ type Pipeline = {
   latest_result: string;
 };
 
+type PipelineRun = {
+  id: number;
+  state?: string;
+  result?: string;
+  createdDate?: string;
+  finishedDate?: string;
+};
+
 type FailureRun = {
   failed_task: string;
   error_message: string;
@@ -33,10 +41,8 @@ type ErrorIntelligenceResponse = {
 };
 
 type Analytics = {
-  total_runs?: number;
   success_count?: number;
   failure_count?: number;
-  success_rate?: number;
   build_trend?: Record<string, number>;
   failure_distribution?: Record<string, number>;
   code_push_frequency?: Record<string, number>;
@@ -123,8 +129,11 @@ function App() {
 
   const [isConnecting, setIsConnecting] = useState(false);
   const [isLoadingProject, setIsLoadingProject] = useState(false);
-  const [modalContent, setModalContent] = useState('');
-  const [showModal, setShowModal] = useState(false);
+
+  const [modalOpen, setModalOpen] = useState(false);
+  const [modalTitle, setModalTitle] = useState('Pipeline Details');
+  const [modalInsight, setModalInsight] = useState('');
+  const [modalRuns, setModalRuns] = useState<PipelineRun[]>([]);
 
   const filteredProjects = useMemo(
     () => projects.filter((p) => p.name.toLowerCase().includes(projectSearch.toLowerCase())),
@@ -191,27 +200,38 @@ function App() {
     }
   };
 
-  const showFailureInsight = async (pipelineId: number) => {
+  const openPipelineModal = async (pipeline: Pipeline) => {
     if (!sessionId || !selectedProject) return;
 
-    try {
-      const response = await fetch(
-        `${API}/api/projects/${encodeURIComponent(selectedProject)}/pipelines/${pipelineId}/error-intelligence?session_id=${sessionId}`,
-      );
-      const payload = (await response.json()) as ErrorIntelligenceResponse;
+    setModalTitle(`Pipeline Details · ${pipeline.name}`);
+    setModalInsight('Loading insight and run history...');
+    setModalRuns([]);
+    setModalOpen(true);
 
-      if (payload.status === 'All Builds Successful') {
-        setModalContent('All Builds Successful');
+    try {
+      const [insightRes, runsRes] = await Promise.all([
+        fetch(
+          `${API}/api/projects/${encodeURIComponent(selectedProject)}/pipelines/${pipeline.id}/error-intelligence?session_id=${sessionId}`,
+        ),
+        fetch(
+          `${API}/api/projects/${encodeURIComponent(selectedProject)}/pipelines/${pipeline.id}/runs?session_id=${sessionId}`,
+        ),
+      ]);
+
+      const insight = (await insightRes.json()) as ErrorIntelligenceResponse;
+      const runs = (await runsRes.json()) as PipelineRun[];
+      setModalRuns(runs);
+
+      if (insight.status === 'All Builds Successful') {
+        setModalInsight('All Builds Successful');
       } else {
-        const first = payload.failed_runs[0];
-        setModalContent(
-          `Failed task: ${first.failed_task}\nError: ${first.error_message}\nTimestamp: ${first.timestamp}\nLogs summary: ${first.logs_summary}\nAI Summary: ${payload.ai_summary ?? 'AI not configured'}`,
+        const first = insight.failed_runs[0];
+        setModalInsight(
+          `Failed task: ${first.failed_task}\nError: ${first.error_message}\nTimestamp: ${first.timestamp}\nLogs summary: ${first.logs_summary}\nAI Summary: ${insight.ai_summary ?? 'AI not configured'}`,
         );
       }
-      setShowModal(true);
     } catch {
-      setModalContent('Unable to load failure details right now.');
-      setShowModal(true);
+      setModalInsight('Unable to load pipeline details right now.');
     }
   };
 
@@ -219,14 +239,8 @@ function App() {
     <>
       <header className="hero">
         <h1>DevOps Ease Access</h1>
-        <p>UI v2 (Step Flow): Login → Projects → Pipeline Dashboard</p>
+        <p>Login first, then choose a project, then view pipeline dashboard.</p>
       </header>
-
-      <nav className="steps" aria-label="App steps">
-        <span className={step === 'login' ? 'step active' : 'step'}>1. Login</span>
-        <span className={step === 'projects' ? 'step active' : 'step'}>2. Projects</span>
-        <span className={step === 'dashboard' ? 'step active' : 'step'}>3. Pipelines & Charts</span>
-      </nav>
 
       <p className="status" aria-live="polite">
         {status}
@@ -235,7 +249,7 @@ function App() {
       {step === 'login' ? (
         <main className="single-page">
           <section className="card login-card" aria-labelledby="login-title">
-            <h2 id="login-title">Page 1 of 3 · Login</h2>
+            <h2 id="login-title">Login</h2>
             <form onSubmit={connect}>
               <label htmlFor="organization">Organization Name</label>
               <input
@@ -267,7 +281,7 @@ function App() {
       {step === 'projects' ? (
         <main className="single-page">
           <section className="card projects-card" aria-labelledby="projects-title">
-            <h2 id="projects-title">Page 2 of 3 · Select Project</h2>
+            <h2 id="projects-title">Select Project</h2>
             <input
               placeholder="Search project..."
               value={projectSearch}
@@ -291,7 +305,7 @@ function App() {
         <main className="dashboard-page">
           <section className="card wide">
             <div className="row-between">
-              <h2>Page 3 of 3 · Pipelines & Dashboard • {selectedProject}</h2>
+              <h2>Pipelines & Dashboard • {selectedProject}</h2>
               <button className="small" onClick={() => setStep('projects')}>
                 ← Back to Projects
               </button>
@@ -304,7 +318,7 @@ function App() {
                     <th>Pipeline</th>
                     <th>Status</th>
                     <th>Result</th>
-                    <th>Insight</th>
+                    <th>History</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -314,7 +328,7 @@ function App() {
                       <td>{pipeline.latest_status}</td>
                       <td>{pipeline.latest_result}</td>
                       <td>
-                        <button onClick={() => showFailureInsight(pipeline.id)}>View</button>
+                        <button onClick={() => openPipelineModal(pipeline)}>View</button>
                       </td>
                     </tr>
                   ))}
@@ -333,10 +347,7 @@ function App() {
                 />
                 {analytics.build_trend ? <VerticalBars title="Build Trend" data={analytics.build_trend} /> : null}
                 {analytics.code_push_frequency ? (
-                  <VerticalBars
-                    title="PR / Code Push Frequency"
-                    data={analytics.code_push_frequency}
-                  />
+                  <VerticalBars title="PR / Code Push Frequency" data={analytics.code_push_frequency} />
                 ) : null}
                 {analytics.failure_distribution ? (
                   <HorizontalBars
@@ -350,11 +361,46 @@ function App() {
             )}
           </section>
 
-          {showModal ? (
+          {modalOpen ? (
             <dialog open aria-labelledby="modal-title" className="modal">
-              <h3 id="modal-title">Pipeline Failure Insight</h3>
-              <pre>{modalContent}</pre>
-              <button onClick={() => setShowModal(false)}>Close</button>
+              <h3 id="modal-title">{modalTitle}</h3>
+
+              <section className="modal-section">
+                <h4>Failure Insight</h4>
+                <pre className="modal-pre">{modalInsight}</pre>
+              </section>
+
+              <section className="modal-section">
+                <h4>Run History</h4>
+                {modalRuns.length === 0 ? (
+                  <p className="muted">No runs found.</p>
+                ) : (
+                  <div className="table-wrap modal-table-wrap">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Run ID</th>
+                          <th>State</th>
+                          <th>Result</th>
+                          <th>Created</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {modalRuns.map((run) => (
+                          <tr key={run.id}>
+                            <td>{run.id}</td>
+                            <td>{run.state ?? '-'}</td>
+                            <td>{run.result ?? '-'}</td>
+                            <td>{run.createdDate ?? '-'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </section>
+
+              <button onClick={() => setModalOpen(false)}>Close</button>
             </dialog>
           ) : null}
         </main>
