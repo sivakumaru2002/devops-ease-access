@@ -4,7 +4,10 @@ from .config import settings
 
 def _load_key() -> bytes:
     if settings.app_encryption_key:
-        return settings.app_encryption_key.encode("utf-8")
+        key = settings.app_encryption_key.encode("utf-8")
+        # Validate key format early to fail fast on misconfiguration.
+        Fernet(key)
+        return key
     return Fernet.generate_key()
 
 
