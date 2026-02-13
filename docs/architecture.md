@@ -2,8 +2,6 @@
 
 ## Recommended Stack
 
-> Authentication decision: **PAT-based Azure DevOps access** is used in the current implementation.
-
 - **Frontend**: React + TypeScript + Vite, with accessible component primitives (e.g., Radix UI or Headless UI).
 - **Backend**: FastAPI (Python) for async Azure DevOps API orchestration.
 - **Database**: PostgreSQL (optional) for historical snapshots and long-term analytics; Redis for cache/session acceleration.
@@ -48,7 +46,6 @@ flowchart LR
 
 - Never persist PAT in frontend local/session storage.
 - Encrypt PAT server-side with `Fernet` using `APP_ENCRYPTION_KEY`.
-- Use least-privilege PAT scopes and short expiration windows.
 - Redact sensitive headers from logs.
 - Add per-IP rate limiting and API gateway policies for production.
 
