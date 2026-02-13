@@ -1,0 +1,83 @@
+:root {
+  --bg: #0b1020;
+  --card: #131a2b;
+  --text: #ecf0ff;
+  --accent: #75b6ff;
+}
+
+body {
+  font-family: Arial, sans-serif;
+  margin: 0;
+  padding: 1rem;
+  background: var(--bg);
+  color: var(--text);
+}
+
+header {
+  margin-bottom: 1rem;
+}
+
+main {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 1rem;
+}
+
+.card {
+  background: var(--card);
+  border: 1px solid #2a3555;
+  border-radius: 10px;
+  padding: 1rem;
+}
+
+input,
+button {
+  width: 100%;
+  margin: 0.25rem 0 0.75rem;
+  padding: 0.5rem;
+}
+
+button {
+  background: var(--accent);
+  color: #001433;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+button:focus,
+input:focus {
+  outline: 3px solid #fff;
+  outline-offset: 2px;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+th,
+td {
+  border-bottom: 1px solid #2a3555;
+  padding: 0.5rem;
+  text-align: left;
+}
+
+.modal {
+  width: min(640px, 90vw);
+  border: 1px solid #2a3555;
+  border-radius: 10px;
+  background: #10172a;
+  color: var(--text);
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  border: 0;
+}
