@@ -159,6 +159,8 @@ async def error_intelligence(project: str, pipeline_id: int, session_id: str, ru
         build_id = run.get("id")
         failed_task = "Unknown Task"
         message = "No error detail available"
+        task_type = "Unknown"
+        log_id = None
 
         try:
             timeline = await client.timeline(project, build_id)
@@ -180,7 +182,9 @@ async def error_intelligence(project: str, pipeline_id: int, session_id: str, ru
                 task_name = task_obj.get("name")
                 display_name = best.get("name")
                 ref_name = best.get("refName")
-                failed_task = task_name or display_name or ref_name or failed_task
+                failed_task = display_name or task_name or ref_name or failed_task
+                task_type = task_name or best.get("type") or "Unknown"
+                log_id = ((best.get("log") or {}).get("id"))
 
                 issues = best.get("issues") or []
                 error_issues = [i for i in issues if i.get("type") == "error"]
@@ -202,6 +206,8 @@ async def error_intelligence(project: str, pipeline_id: int, session_id: str, ru
                 "error_message": message,
                 "timestamp": run.get("createdDate"),
                 "logs_summary": message[:180],
+                "task_type": task_type,
+                "log_id": log_id,
             }
         )
 
