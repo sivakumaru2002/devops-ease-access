@@ -2,12 +2,34 @@ import React, { FormEvent, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import './styles.css';
 
-type Step = 'login' | 'projects' | 'dashboard';
+type Step = 'userAuth' | 'homeChoice' | 'devopsLogin' | 'projects' | 'dashboard';
 
 type ConnectResponse = {
   session_id: string;
   organization: string;
   project_count: number;
+};
+
+type AuthResponse = {
+  auth_token: string;
+  email: string;
+  username: string;
+  is_admin: boolean;
+  approved: boolean;
+};
+
+type DashboardItem = {
+  id: string;
+  name: string;
+  description?: string | null;
+  created_by: string;
+  created_at: string;
+};
+
+type PendingUser = {
+  id: string;
+  email: string;
+  username: string;
 };
 
 type Project = { name: string };
@@ -24,7 +46,6 @@ type PipelineRun = {
   state?: string;
   result?: string;
   createdDate?: string;
-  finishedDate?: string;
 };
 
 type FailedRun = {
@@ -33,8 +54,6 @@ type FailedRun = {
   error_message: string;
   timestamp: string;
   logs_summary: string;
-  task_type?: string;
-  log_id?: number;
 };
 
 type ErrorIntelligenceResponse = {
@@ -51,12 +70,22 @@ type Analytics = {
   code_push_frequency?: Record<string, number>;
 };
 
+type ResourceItem = {
+  id: string;
+  organization: string;
+  project: string;
+  environment: string;
+  name: string;
+  url: string;
+  resource_type?: string | null;
+  notes?: string | null;
+};
+
 const API = 'http://localhost:8000';
 
 function VerticalBars({ title, data }: { title: string; data: Record<string, number> }) {
   const entries = Object.entries(data);
   const max = Math.max(...entries.map(([, value]) => value), 1);
-
   return (
     <article className="chart-card">
       <h3>{title}</h3>
@@ -76,7 +105,6 @@ function VerticalBars({ title, data }: { title: string; data: Record<string, num
 function HorizontalBars({ title, data }: { title: string; data: Record<string, number> }) {
   const entries = Object.entries(data).sort((a, b) => b[1] - a[1]);
   const max = Math.max(...entries.map(([, value]) => value), 1);
-
   return (
     <article className="chart-card">
       <h3>{title}</h3>
@@ -117,11 +145,29 @@ function SuccessFailureGraph({ success = 0, failure = 0 }: { success?: number; f
 }
 
 function App() {
-  const [step, setStep] = useState<Step>('login');
+  const [step, setStep] = useState<Step>('userAuth');
+  const [status, setStatus] = useState('Sign in with dashboard account or register a new user.');
+
+  const [authToken, setAuthToken] = useState<string | null>(null);
+  const [userEmail, setUserEmail] = useState('');
+  const [userName, setUserName] = useState('');
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [isApproved, setIsApproved] = useState(false);
+
+  const [loginEmailOrUser, setLoginEmailOrUser] = useState('admin@gmail.com');
+  const [loginPassword, setLoginPassword] = useState('admin');
+  const [registerEmail, setRegisterEmail] = useState('');
+  const [registerUserName, setRegisterUserName] = useState('');
+  const [registerPassword, setRegisterPassword] = useState('');
+
+  const [dashboards, setDashboards] = useState<DashboardItem[]>([]);
+  const [pendingUsers, setPendingUsers] = useState<PendingUser[]>([]);
+  const [dashboardName, setDashboardName] = useState('');
+  const [dashboardDescription, setDashboardDescription] = useState('');
+
   const [organization, setOrganization] = useState('');
   const [pat, setPat] = useState('');
   const [sessionId, setSessionId] = useState<string | null>(null);
-  const [status, setStatus] = useState('Please login with organization and PAT.');
 
   const [projects, setProjects] = useState<Project[]>([]);
   const [projectSearch, setProjectSearch] = useState('');
@@ -131,61 +177,184 @@ function App() {
   const [analytics, setAnalytics] = useState<Analytics | null>(null);
   const [pipelineRuns, setPipelineRuns] = useState<Record<number, PipelineRun[]>>({});
 
-  const [isConnecting, setIsConnecting] = useState(false);
-  const [isLoadingProject, setIsLoadingProject] = useState(false);
-  const [isLoadingDashboard, setIsLoadingDashboard] = useState(false);
+  const [resources, setResources] = useState<ResourceItem[]>([]);
+  const [resourceEnvironment, setResourceEnvironment] = useState('');
+  const [resourceName, setResourceName] = useState('');
+  const [resourceUrl, setResourceUrl] = useState('');
+  const [resourceType, setResourceType] = useState('');
+  const [resourceNotes, setResourceNotes] = useState('');
+
+  const [isBusy, setIsBusy] = useState(false);
   const [loadingRunsByPipeline, setLoadingRunsByPipeline] = useState<Record<number, boolean>>({});
 
   const [modalOpen, setModalOpen] = useState(false);
   const [modalTitle, setModalTitle] = useState('Failure Explanation');
   const [modalErrorText, setModalErrorText] = useState('');
   const [modalExplanationText, setModalExplanationText] = useState('');
-  const [isLoadingExplanation, setIsLoadingExplanation] = useState(false);
 
   const filteredProjects = useMemo(
     () => projects.filter((p) => p.name.toLowerCase().includes(projectSearch.toLowerCase())),
     [projects, projectSearch],
   );
 
-  const connect = async (event: FormEvent) => {
-    event.preventDefault();
-    setIsConnecting(true);
-    setStatus('Connecting to Azure DevOps...');
+  const resourcesByEnvironment = useMemo(() => {
+    const grouped: Record<string, ResourceItem[]> = {};
+    for (const resource of resources) {
+      const key = resource.environment || 'Unspecified';
+      grouped[key] = grouped[key] ?? [];
+      grouped[key].push(resource);
+    }
+    return grouped;
+  }, [resources]);
 
+  const loginDashboardUser = async (event: FormEvent) => {
+    event.preventDefault();
+    setIsBusy(true);
     try {
-      const response = await fetch(`${API}/api/connect`, {
+      const response = await fetch(`${API}/api/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email_or_username: loginEmailOrUser, password: loginPassword }),
+      });
+      if (!response.ok) {
+        setStatus('Dashboard login failed.');
+        return;
+      }
+      const payload = (await response.json()) as AuthResponse;
+      setAuthToken(payload.auth_token);
+      setUserEmail(payload.email);
+      setUserName(payload.username);
+      setIsAdmin(payload.is_admin);
+      setIsApproved(payload.approved);
+
+      if (!payload.approved) {
+        setStatus('Your account is waiting for admin approval.');
+        return;
+      }
+
+      setStatus(`Welcome ${payload.username}. Choose Dashboard or DevOps.`);
+      await loadDashboards(payload.auth_token);
+      if (payload.is_admin) {
+        await loadPendingUsers(payload.auth_token);
+      }
+      setStep('homeChoice');
+    } catch {
+      setStatus('Network error during login.');
+    } finally {
+      setIsBusy(false);
+    }
+  };
+
+  const registerDashboardUser = async (event: FormEvent) => {
+    event.preventDefault();
+    setIsBusy(true);
+    try {
+      const response = await fetch(`${API}/api/auth/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: registerEmail, username: registerUserName, password: registerPassword }),
+      });
+      if (!response.ok) {
+        setStatus('Registration failed. User/email may already exist.');
+        return;
+      }
+      setRegisterEmail('');
+      setRegisterUserName('');
+      setRegisterPassword('');
+      setStatus('Registration submitted. Wait for admin approval, then login.');
+    } catch {
+      setStatus('Network error during registration.');
+    } finally {
+      setIsBusy(false);
+    }
+  };
+
+  const loadDashboards = async (token = authToken) => {
+    if (!token) return;
+    const response = await fetch(`${API}/api/dashboards?auth_token=${token}`);
+    if (response.ok) {
+      setDashboards((await response.json()) as DashboardItem[]);
+    }
+  };
+
+  const createDashboard = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!authToken) return;
+    setIsBusy(true);
+    try {
+      const response = await fetch(`${API}/api/dashboards?auth_token=${authToken}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: dashboardName, description: dashboardDescription }),
+      });
+      if (response.ok) {
+        setDashboardName('');
+        setDashboardDescription('');
+        setStatus('Dashboard created.');
+        await loadDashboards();
+      } else {
+        setStatus('Only admin can create dashboards.');
+      }
+    } finally {
+      setIsBusy(false);
+    }
+  };
+
+  const loadPendingUsers = async (token = authToken) => {
+    if (!token) return;
+    const response = await fetch(`${API}/api/admin/pending-users?auth_token=${token}`);
+    if (response.ok) {
+      setPendingUsers((await response.json()) as PendingUser[]);
+    }
+  };
+
+  const approveUser = async (userId: string) => {
+    if (!authToken) return;
+    setIsBusy(true);
+    try {
+      await fetch(`${API}/api/admin/users/${userId}/approve?auth_token=${authToken}`, { method: 'POST' });
+      await loadPendingUsers();
+      setStatus('User approved.');
+    } finally {
+      setIsBusy(false);
+    }
+  };
+
+  const connectDevops = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!authToken) return;
+    setIsBusy(true);
+    setStatus('Connecting to Azure DevOps...');
+    try {
+      const response = await fetch(`${API}/api/connect?auth_token=${authToken}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ organization, pat }),
       });
-
       if (!response.ok) {
-        setStatus('Login failed. Please verify organization name and PAT.');
+        setStatus('DevOps login failed. Verify org/PAT and user approval.');
         return;
       }
-
       const payload = (await response.json()) as ConnectResponse;
       setSessionId(payload.session_id);
-      setStatus(`Connected successfully. ${payload.project_count} projects found.`);
+      setStatus(`DevOps connected. ${payload.project_count} projects found.`);
 
       const projectsResponse = await fetch(`${API}/api/projects?session_id=${payload.session_id}`);
       const projectsPayload = (await projectsResponse.json()) as Project[];
       setProjects(projectsPayload);
       setStep('projects');
     } catch {
-      setStatus('Network error while logging in. Please try again.');
+      setStatus('Network error while connecting DevOps.');
     } finally {
-      setIsConnecting(false);
+      setIsBusy(false);
     }
   };
 
   const openProjectDashboard = async (projectName: string) => {
     if (!sessionId) return;
     setSelectedProject(projectName);
-    setIsLoadingProject(true);
-    setIsLoadingDashboard(true);
+    setIsBusy(true);
     setStatus(`Loading dashboard for ${projectName}...`);
-
     try {
       const [pipelinesResponse, analyticsResponse] = await Promise.all([
         fetch(`${API}/api/projects/${encodeURIComponent(projectName)}/pipelines?session_id=${sessionId}`),
@@ -194,23 +363,58 @@ function App() {
 
       const pipelinesPayload = (await pipelinesResponse.json()) as Pipeline[];
       const analyticsPayload = (await analyticsResponse.json()) as Analytics;
-
       setPipelines(pipelinesPayload);
       setAnalytics(analyticsPayload);
       setPipelineRuns({});
+      await loadResources(projectName);
       setStep('dashboard');
       setStatus(`Loaded dashboard for ${projectName}.`);
-    } catch {
-      setStatus('Could not load project dashboard. Please try again.');
     } finally {
-      setIsLoadingProject(false);
-      setIsLoadingDashboard(false);
+      setIsBusy(false);
+    }
+  };
+
+  const loadResources = async (projectName?: string) => {
+    if (!sessionId) return;
+    const projectParam = encodeURIComponent(projectName ?? selectedProject ?? '');
+    const response = await fetch(`${API}/api/resources?session_id=${sessionId}&project=${projectParam}`);
+    if (response.ok) {
+      setResources((await response.json()) as ResourceItem[]);
+    }
+  };
+
+  const createResource = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!sessionId || !selectedProject) return;
+    setIsBusy(true);
+    try {
+      const response = await fetch(`${API}/api/resources?session_id=${sessionId}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          project: selectedProject,
+          environment: resourceEnvironment,
+          name: resourceName,
+          url: resourceUrl,
+          resource_type: resourceType || undefined,
+          notes: resourceNotes || undefined,
+        }),
+      });
+      if (response.ok) {
+        setResourceEnvironment('');
+        setResourceName('');
+        setResourceUrl('');
+        setResourceType('');
+        setResourceNotes('');
+        await loadResources(selectedProject);
+      }
+    } finally {
+      setIsBusy(false);
     }
   };
 
   const loadRunsForPipeline = async (pipelineId: number) => {
     if (!sessionId || !selectedProject || pipelineRuns[pipelineId]) return;
-
     setLoadingRunsByPipeline((prev) => ({ ...prev, [pipelineId]: true }));
     try {
       const response = await fetch(
@@ -225,11 +429,9 @@ function App() {
 
   const explainRunFailure = async (pipeline: Pipeline, run: PipelineRun) => {
     if (!sessionId || !selectedProject) return;
-
     setModalTitle(`Failure Explanation · ${pipeline.name} · Run ${run.id}`);
     setModalErrorText('Loading error details...');
     setModalExplanationText('Loading explanation...');
-    setIsLoadingExplanation(true);
     setModalOpen(true);
 
     try {
@@ -237,40 +439,19 @@ function App() {
         `${API}/api/projects/${encodeURIComponent(selectedProject)}/pipelines/${pipeline.id}/error-intelligence?session_id=${sessionId}&run_id=${run.id}`,
       );
       const insight = (await response.json()) as ErrorIntelligenceResponse;
-
-      if (insight.status === 'All Builds Successful') {
-        setModalErrorText('No error for this run. It is reported as successful.');
-        setModalExplanationText('No explanation needed because this run did not fail.');
-        return;
-      }
-
       const matched = insight.failed_runs.find((f) => f.run_id === run.id);
       if (!matched) {
         setModalErrorText('No specific error detail was found for this run.');
-        setModalExplanationText('The run failed, but detailed task-level error was not available.');
+        setModalExplanationText('No explanation available.');
         return;
       }
-
-      const logUrl = matched.log_id
-        ? `https://dev.azure.com/${organization}/${encodeURIComponent(selectedProject)}/_apis/build/builds/${run.id}/logs/${matched.log_id}?api-version=7.1-preview.2`
-        : 'N/A';
       setModalErrorText(
-        `Failed task: ${matched.failed_task}
-Task type: ${matched.task_type ?? 'Unknown'}
-Error: ${matched.error_message}
-Timestamp: ${matched.timestamp}
-Log ID: ${matched.log_id ?? 'N/A'}
-Log API: ${logUrl}
-Logs summary: ${matched.logs_summary}`,
+        `Failed task: ${matched.failed_task}\nError: ${matched.error_message}\nTimestamp: ${matched.timestamp}\nSummary: ${matched.logs_summary}`,
       );
-      setModalExplanationText(
-        insight.ai_summary ?? 'AI explanation is not configured for this environment.',
-      );
+      setModalExplanationText(insight.ai_summary ?? 'AI explanation not configured.');
     } catch {
       setModalErrorText('Unable to load error details right now.');
       setModalExplanationText('Unable to generate explanation right now.');
-    } finally {
-      setIsLoadingExplanation(false);
     }
   };
 
@@ -278,65 +459,120 @@ Logs summary: ${matched.logs_summary}`,
     <>
       <header className="hero">
         <h1>DevOps Ease Access</h1>
-        <p>Login first, then choose a project, then view charts and pipeline history.</p>
+        <p>Secure dashboard login, admin approval, then choose Dashboard or DevOps.</p>
       </header>
 
-      <p className="status" aria-live="polite">
-        {status}
-      </p>
+      <p className="status" aria-live="polite">{status}</p>
 
-      {step === 'login' ? (
-        <main className="single-page">
-          <section className="card login-card" aria-labelledby="login-title">
-            <h2 id="login-title">Login</h2>
-            <form onSubmit={connect}>
-              <label htmlFor="organization">Organization Name</label>
-              <input
-                id="organization"
-                placeholder="e.g. contoso"
-                value={organization}
-                onChange={(event) => setOrganization(event.target.value)}
-                required
-              />
-
-              <label htmlFor="pat">Personal Access Token (PAT)</label>
-              <input
-                id="pat"
-                type="password"
-                placeholder="Paste PAT"
-                value={pat}
-                onChange={(event) => setPat(event.target.value)}
-                required
-              />
-
-              <button type="submit" disabled={isConnecting}>
-                {isConnecting ? 'Connecting...' : 'Login'}
-              </button>
+      {step === 'userAuth' ? (
+        <main className="single-page two-col">
+          <section className="card login-card">
+            <h2>Dashboard Login</h2>
+            <form onSubmit={loginDashboardUser}>
+              <label>Email or Username</label>
+              <input value={loginEmailOrUser} onChange={(e) => setLoginEmailOrUser(e.target.value)} required />
+              <label>Password</label>
+              <input type="password" value={loginPassword} onChange={(e) => setLoginPassword(e.target.value)} required />
+              <button type="submit" disabled={isBusy}>{isBusy ? 'Please wait...' : 'Login'}</button>
             </form>
+            <p className="muted">Default admin: admin@gmail.com / admin</p>
+          </section>
+
+          <section className="card login-card">
+            <h2>Register User</h2>
+            <form onSubmit={registerDashboardUser}>
+              <label>Email</label>
+              <input value={registerEmail} onChange={(e) => setRegisterEmail(e.target.value)} required />
+              <label>Username</label>
+              <input value={registerUserName} onChange={(e) => setRegisterUserName(e.target.value)} required />
+              <label>Password</label>
+              <input type="password" value={registerPassword} onChange={(e) => setRegisterPassword(e.target.value)} required />
+              <button type="submit" disabled={isBusy}>{isBusy ? 'Submitting...' : 'Register'}</button>
+            </form>
+          </section>
+        </main>
+      ) : null}
+
+      {step === 'homeChoice' ? (
+        <main className="single-page">
+          <section className="card">
+            <h2>Welcome {userName}</h2>
+            <p>{userEmail} {isAdmin ? '(Admin)' : '(Viewer)'}</p>
+            <div className="row-between">
+              <button className="small" onClick={() => setStep('devopsLogin')}>Go to DevOps</button>
+              <button className="small" onClick={() => void loadDashboards()}>Refresh Dashboards</button>
+            </div>
+            <h3>Dashboards</h3>
+            <ul className="resource-list">
+              {dashboards.map((dashboard) => (
+                <li key={dashboard.id} className="resource-item">
+                  <strong>{dashboard.name}</strong>
+                  <p className="muted">{dashboard.description ?? 'No description'}</p>
+                </li>
+              ))}
+            </ul>
+          </section>
+
+          {isAdmin ? (
+            <section className="card">
+              <h3>Create Dashboard (Admin)</h3>
+              <form onSubmit={createDashboard}>
+                <label>Name</label>
+                <input value={dashboardName} onChange={(e) => setDashboardName(e.target.value)} required />
+                <label>Description</label>
+                <input value={dashboardDescription} onChange={(e) => setDashboardDescription(e.target.value)} />
+                <button type="submit" disabled={isBusy}>Create</button>
+              </form>
+
+              <h3>Pending Users</h3>
+              <button className="small" onClick={() => void loadPendingUsers()} disabled={isBusy}>Refresh Pending</button>
+              <ul className="resource-list">
+                {pendingUsers.map((u) => (
+                  <li key={u.id} className="resource-item">
+                    <p><strong>{u.username}</strong> · {u.email}</p>
+                    <button className="small" onClick={() => void approveUser(u.id)}>Approve</button>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          ) : null}
+        </main>
+      ) : null}
+
+      {step === 'devopsLogin' ? (
+        <main className="single-page">
+          <section className="card login-card">
+            <h2>DevOps Login</h2>
+            {!isApproved ? <p className="muted">Waiting for admin approval.</p> : null}
+            <form onSubmit={connectDevops}>
+              <label>Organization Name</label>
+              <input value={organization} onChange={(e) => setOrganization(e.target.value)} required />
+              <label>PAT</label>
+              <input type="password" value={pat} onChange={(e) => setPat(e.target.value)} required />
+              <button type="submit" disabled={isBusy || !isApproved}>{isBusy ? 'Connecting...' : 'Connect DevOps'}</button>
+            </form>
+            <button className="small" onClick={() => setStep('homeChoice')}>Back</button>
           </section>
         </main>
       ) : null}
 
       {step === 'projects' ? (
         <main className="single-page">
-          <section className="card projects-card" aria-labelledby="projects-title">
-            <h2 id="projects-title">Select Project</h2>
+          <section className="card projects-card">
+            <h2>Select Project</h2>
             <input
               placeholder="Search project..."
               value={projectSearch}
               onChange={(event) => setProjectSearch(event.target.value)}
-              aria-label="Search project"
             />
-            {isLoadingProject ? <p className="loader">Loading project dashboard...</p> : null}
             <ul className="project-list">
               {filteredProjects.map((project) => (
                 <li key={project.name}>
-                  <button onClick={() => openProjectDashboard(project.name)} disabled={isLoadingProject}>
-                    {project.name}
-                  </button>
+                  <button onClick={() => void openProjectDashboard(project.name)}>{project.name}</button>
                 </li>
               ))}
             </ul>
+            <button className="small" onClick={() => setStep('homeChoice')}>Back to choice</button>
           </section>
         </main>
       ) : null}
@@ -345,39 +581,60 @@ Logs summary: ${matched.logs_summary}`,
         <main className="dashboard-page">
           <section className="card wide" aria-labelledby="charts-title">
             <h2 id="charts-title">Charts</h2>
-            {isLoadingDashboard ? <p className="loader">Loading charts...</p> : null}
             {analytics ? (
               <div className="chart-grid">
-                <SuccessFailureGraph
-                  success={analytics.success_count ?? 0}
-                  failure={analytics.failure_count ?? 0}
-                />
+                <SuccessFailureGraph success={analytics.success_count ?? 0} failure={analytics.failure_count ?? 0} />
                 {analytics.build_trend ? <VerticalBars title="Build Trend" data={analytics.build_trend} /> : null}
                 {analytics.code_push_frequency ? (
                   <VerticalBars title="PR / Code Push Frequency" data={analytics.code_push_frequency} />
                 ) : null}
                 {analytics.failure_distribution ? (
-                  <HorizontalBars
-                    title="Pipeline Failure Distribution"
-                    data={analytics.failure_distribution}
-                  />
+                  <HorizontalBars title="Pipeline Failure Distribution" data={analytics.failure_distribution} />
                 ) : null}
               </div>
-            ) : (
-              <p>No analytics data yet.</p>
-            )}
+            ) : <p>No analytics data yet.</p>}
+          </section>
+
+          <section className="card wide">
+            <div className="row-between">
+              <h2>Resource Cards • {selectedProject}</h2>
+              <button className="small" onClick={() => void loadResources(selectedProject ?? undefined)}>Refresh</button>
+            </div>
+            <form className="resource-form" onSubmit={createResource}>
+              <label>Environment</label>
+              <input value={resourceEnvironment} onChange={(e) => setResourceEnvironment(e.target.value)} required />
+              <label>Resource Name</label>
+              <input value={resourceName} onChange={(e) => setResourceName(e.target.value)} required />
+              <label>Resource URL</label>
+              <input value={resourceUrl} onChange={(e) => setResourceUrl(e.target.value)} required />
+              <label>Resource Type</label>
+              <input value={resourceType} onChange={(e) => setResourceType(e.target.value)} />
+              <label>Notes</label>
+              <input value={resourceNotes} onChange={(e) => setResourceNotes(e.target.value)} />
+              <button type="submit" disabled={isBusy}>Add Resource</button>
+            </form>
+
+            {Object.entries(resourcesByEnvironment).map(([env, items]) => (
+              <article key={env} className="resource-group">
+                <h3>{env}</h3>
+                <ul className="resource-list">
+                  {items.map((resource) => (
+                    <li key={resource.id} className="resource-item">
+                      <p><strong>{resource.name}</strong> {resource.resource_type ? `· ${resource.resource_type}` : ''}</p>
+                      <a href={resource.url} target="_blank" rel="noreferrer">{resource.url}</a>
+                      {resource.notes ? <p className="muted">{resource.notes}</p> : null}
+                    </li>
+                  ))}
+                </ul>
+              </article>
+            ))}
           </section>
 
           <section className="card wide">
             <div className="row-between">
               <h2>Pipelines • {selectedProject}</h2>
-              <button className="small" onClick={() => setStep('projects')}>
-                ← Back to Projects
-              </button>
+              <button className="small" onClick={() => setStep('projects')}>Back to Projects</button>
             </div>
-
-            {pipelines.length === 0 ? <p className="muted">No pipelines found.</p> : null}
-
             <div className="pipeline-accordion">
               {pipelines.map((pipeline) => (
                 <details
@@ -385,46 +642,24 @@ Logs summary: ${matched.logs_summary}`,
                   className="pipeline-item"
                   onToggle={(event) => {
                     const el = event.currentTarget as HTMLDetailsElement;
-                    if (el.open) {
-                      void loadRunsForPipeline(pipeline.id);
-                    }
+                    if (el.open) void loadRunsForPipeline(pipeline.id);
                   }}
                 >
                   <summary>
                     <span>{pipeline.name}</span>
-                    <span className="muted">
-                      {pipeline.latest_status} · {pipeline.latest_result}
-                    </span>
+                    <span className="muted">{pipeline.latest_status} · {pipeline.latest_result}</span>
                   </summary>
-
-                  {loadingRunsByPipeline[pipeline.id] ? (
-                    <p className="loader">Loading run history...</p>
-                  ) : (
+                  {loadingRunsByPipeline[pipeline.id] ? <p className="loader">Loading run history...</p> : (
                     <div className="table-wrap">
                       <table>
                         <thead>
-                          <tr>
-                            <th>Run ID</th>
-                            <th>State</th>
-                            <th>Result</th>
-                            <th>Created</th>
-                            <th>Error</th>
-                          </tr>
+                          <tr><th>Run ID</th><th>State</th><th>Result</th><th>Created</th><th>Error</th></tr>
                         </thead>
                         <tbody>
                           {(pipelineRuns[pipeline.id] ?? []).map((run) => (
                             <tr key={run.id}>
-                              <td>{run.id}</td>
-                              <td>{run.state ?? '-'}</td>
-                              <td>{run.result ?? '-'}</td>
-                              <td>{run.createdDate ?? '-'}</td>
-                              <td>
-                                {run.result === 'failed' ? (
-                                  <button onClick={() => explainRunFailure(pipeline, run)}>Explain error</button>
-                                ) : (
-                                  <span className="muted">-</span>
-                                )}
-                              </td>
+                              <td>{run.id}</td><td>{run.state ?? '-'}</td><td>{run.result ?? '-'}</td><td>{run.createdDate ?? '-'}</td>
+                              <td>{run.result === 'failed' ? <button onClick={() => void explainRunFailure(pipeline, run)}>Explain error</button> : '-'}</td>
                             </tr>
                           ))}
                         </tbody>
@@ -437,20 +672,10 @@ Logs summary: ${matched.logs_summary}`,
           </section>
 
           {modalOpen ? (
-            <dialog open aria-labelledby="modal-title" className="modal">
-              <h3 id="modal-title">{modalTitle}</h3>
-              {isLoadingExplanation ? <p className="loader">Loading explanation...</p> : null}
-
-              <section className="modal-block">
-                <h4>Error</h4>
-                <pre className="modal-pre">{modalErrorText}</pre>
-              </section>
-
-              <section className="modal-block">
-                <h4>Explanation</h4>
-                <pre className="modal-pre">{modalExplanationText}</pre>
-              </section>
-
+            <dialog open className="modal">
+              <h3>{modalTitle}</h3>
+              <section className="modal-block"><h4>Error</h4><pre className="modal-pre">{modalErrorText}</pre></section>
+              <section className="modal-block"><h4>Explanation</h4><pre className="modal-pre">{modalExplanationText}</pre></section>
               <button onClick={() => setModalOpen(false)}>Close</button>
             </dialog>
           ) : null}

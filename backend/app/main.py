@@ -9,8 +9,21 @@ from .ai import summarize_failures
 from .azure_devops import AzureDevOpsClient
 from .cache import TTLCache
 from .config import settings
-from .models import ConnectRequest, ConnectResponse
+from .models import (
+    AuthResponse,
+    ConnectRequest,
+    ConnectResponse,
+    DashboardCreateRequest,
+    DashboardItem,
+    LoginRequest,
+    PendingUserItem,
+    RegisterRequest,
+    ResourceCreateRequest,
+    ResourceItem,
+)
+from .resources_store import ResourceStore
 from .security import decrypt_secret, encrypt_secret
+from .user_store import UserStore
 
 
 app = FastAPI(title=settings.app_name)
@@ -23,7 +36,38 @@ app.add_middleware(
 )
 
 session_store: dict[str, dict] = {}
+auth_sessions: dict[str, dict] = {}
 cache = TTLCache(settings.cache_ttl_seconds)
+resource_store = ResourceStore()
+user_store = UserStore()
+
+
+def _get_auth_user(auth_token: str) -> dict:
+    auth = auth_sessions.get(auth_token)
+    if not auth:
+        raise HTTPException(401, "Invalid auth token")
+    if auth["expires_at"] < datetime.utcnow():
+        auth_sessions.pop(auth_token, None)
+        raise HTTPException(401, "Auth session expired")
+
+    user = user_store.find_user(auth["email"])
+    if not user:
+        raise HTTPException(401, "User no longer exists")
+    return user
+
+
+def _require_approved_user(auth_token: str) -> dict:
+    user = _get_auth_user(auth_token)
+    if not user.get("approved"):
+        raise HTTPException(403, "User is pending admin approval")
+    return user
+
+
+def _require_admin(auth_token: str) -> dict:
+    user = _get_auth_user(auth_token)
+    if not user.get("is_admin"):
+        raise HTTPException(403, "Admin access required")
+    return user
 
 
 def _get_session(session_id: str) -> dict:
@@ -41,8 +85,107 @@ async def health() -> dict:
     return {"status": "ok"}
 
 
+@app.post("/api/auth/register")
+async def register_user(payload: RegisterRequest) -> dict:
+    try:
+        created = user_store.create_user(payload.email, payload.username, payload.password)
+    except ValueError as ex:
+        raise HTTPException(400, str(ex)) from ex
+
+    return {
+        "message": "Registration submitted. Please wait for admin approval.",
+        "user": {
+            "id": created["id"],
+            "email": created["email"],
+            "username": created["username"],
+            "approved": created["approved"],
+        },
+    }
+
+
+@app.post("/api/auth/login", response_model=AuthResponse)
+async def login_user(payload: LoginRequest) -> AuthResponse:
+    user = user_store.verify_credentials(payload.email_or_username, payload.password)
+    if not user:
+        raise HTTPException(401, "Invalid credentials")
+
+    auth_token = str(uuid4())
+    auth_sessions[auth_token] = {
+        "email": user["email"],
+        "expires_at": datetime.utcnow() + timedelta(minutes=settings.session_ttl_minutes),
+    }
+
+    return AuthResponse(
+        auth_token=auth_token,
+        email=user["email"],
+        username=user["username"],
+        is_admin=bool(user.get("is_admin")),
+        approved=bool(user.get("approved")),
+    )
+
+
+@app.get("/api/auth/me")
+async def auth_me(auth_token: str) -> dict:
+    user = _get_auth_user(auth_token)
+    return {
+        "email": user["email"],
+        "username": user["username"],
+        "is_admin": bool(user.get("is_admin")),
+        "approved": bool(user.get("approved")),
+    }
+
+
+@app.get("/api/admin/pending-users", response_model=list[PendingUserItem])
+async def list_pending_users(auth_token: str) -> list[PendingUserItem]:
+    _require_admin(auth_token)
+    rows = user_store.list_pending_users()
+    return [
+        PendingUserItem(
+            id=row["id"],
+            email=row["email"],
+            username=row["username"],
+            approved=bool(row.get("approved")),
+            is_admin=bool(row.get("is_admin")),
+            created_at=row["created_at"],
+        )
+        for row in rows
+    ]
+
+
+@app.post("/api/admin/users/{user_id}/approve")
+async def approve_user(user_id: str, auth_token: str) -> dict:
+    _require_admin(auth_token)
+    updated = user_store.approve_user(user_id)
+    if not updated:
+        raise HTTPException(404, "User not found")
+    return {
+        "message": "User approved",
+        "user": {
+            "id": updated["id"],
+            "email": updated["email"],
+            "username": updated["username"],
+            "approved": bool(updated.get("approved")),
+        },
+    }
+
+
+@app.get("/api/dashboards", response_model=list[DashboardItem])
+async def list_dashboards(auth_token: str) -> list[DashboardItem]:
+    _require_approved_user(auth_token)
+    return [DashboardItem(**item) for item in user_store.list_dashboards()]
+
+
+@app.post("/api/dashboards", response_model=DashboardItem)
+async def create_dashboard(payload: DashboardCreateRequest, auth_token: str) -> DashboardItem:
+    admin = _require_admin(auth_token)
+    created = user_store.create_dashboard(payload.name, payload.description, created_by=admin["email"])
+    return DashboardItem(**created)
+
+
 @app.post("/api/connect", response_model=ConnectResponse)
-async def connect(payload: ConnectRequest) -> ConnectResponse:
+async def connect(payload: ConnectRequest, auth_token: str) -> ConnectResponse:
+    _require_approved_user(auth_token)
+
     client = AzureDevOpsClient(payload.organization, payload.pat)
     try:
         projects = await client.list_projects()
@@ -119,6 +262,35 @@ async def pipeline_runs(project: str, pipeline_id: int, session_id: str) -> list
     return await client.list_pipeline_runs(project, pipeline_id)
 
 
+@app.get("/api/resources", response_model=list[ResourceItem])
+async def list_resources(session_id: str, project: str | None = None, environment: str | None = None) -> list[ResourceItem]:
+    session = _get_session(session_id)
+    rows = resource_store.list_resources(
+        organization=session["organization"],
+        project=project,
+        environment=environment,
+    )
+    return [ResourceItem(**row) for row in rows]
+
+
+@app.post("/api/resources", response_model=ResourceItem)
+async def create_resource(payload: ResourceCreateRequest, session_id: str) -> ResourceItem:
+    session = _get_session(session_id)
+
+    created = resource_store.add_resource(
+        {
+            "organization": session["organization"],
+            "project": payload.project.strip(),
+            "environment": payload.environment.strip(),
+            "name": payload.name.strip(),
+            "url": payload.url.strip(),
+            "resource_type": payload.resource_type.strip() if payload.resource_type else None,
+            "notes": payload.notes.strip() if payload.notes else None,
+        }
+    )
+    return ResourceItem(**created)
+
+
 @app.get("/api/projects/{project}/pipelines/{pipeline_id}/error-intelligence")
 async def error_intelligence(project: str, pipeline_id: int, session_id: str, run_id: int | None = None) -> dict:
     session = _get_session(session_id)
@@ -159,15 +331,11 @@ async def error_intelligence(project: str, pipeline_id: int, session_id: str, ru
         build_id = run.get("id")
         failed_task = "Unknown Task"
         message = "No error detail available"
-        task_type = "Unknown"
-        log_id = None
 
         try:
             timeline = await client.timeline(project, build_id)
             failed_records = [r for r in timeline.get("records", []) if r.get("result") == "failed"]
             if failed_records:
-                # Prefer failed task records with explicit issues; avoid stage/job wrappers
-                # like "__default" whenever a concrete failed task exists.
                 prioritized = sorted(
                     failed_records,
                     key=lambda r: (
@@ -183,8 +351,6 @@ async def error_intelligence(project: str, pipeline_id: int, session_id: str, ru
                 display_name = best.get("name")
                 ref_name = best.get("refName")
                 failed_task = display_name or task_name or ref_name or failed_task
-                task_type = task_name or best.get("type") or "Unknown"
-                log_id = ((best.get("log") or {}).get("id"))
 
                 issues = best.get("issues") or []
                 error_issues = [i for i in issues if i.get("type") == "error"]
@@ -193,7 +359,6 @@ async def error_intelligence(project: str, pipeline_id: int, session_id: str, ru
                 elif issues:
                     message = issues[0].get("message", message)
                 else:
-                    # Fallback to timeline metadata if issues are absent.
                     message = best.get("resultCode") or best.get("currentOperation") or display_name or message
         except Exception:
             pass
@@ -206,8 +371,6 @@ async def error_intelligence(project: str, pipeline_id: int, session_id: str, ru
                 "error_message": message,
                 "timestamp": run.get("createdDate"),
                 "logs_summary": message[:180],
-                "task_type": task_type,
-                "log_id": log_id,
             }
         )
 
