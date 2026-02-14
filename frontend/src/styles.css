@@ -222,3 +222,59 @@ th, td {
   .dashboard-page { grid-template-columns: 1fr; }
   .wide { grid-column: span 1; }
 }
+
+.resource-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 0.5rem 0.8rem;
+  margin-bottom: 0.8rem;
+}
+
+.resource-form button {
+  align-self: end;
+}
+
+.resource-groups {
+  display: grid;
+  gap: 0.8rem;
+}
+
+.resource-group {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.6rem;
+  background: #0e172d;
+}
+
+.resource-group h3 {
+  margin: 0 0 0.5rem;
+}
+
+.resource-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.resource-item {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.5rem;
+  background: #0b1429;
+}
+
+.resource-item p {
+  margin: 0.2rem 0;
+}
+
+.resource-item a {
+  color: #9ed0ff;
+  word-break: break-all;
+}
+
+
+.two-col {
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+}
