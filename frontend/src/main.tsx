@@ -123,6 +123,13 @@ function App() {
   const [portalResourceUrl, setPortalResourceUrl] = useState('');
   const [portalResourceType, setPortalResourceType] = useState('');
   const [portalResourceNotes, setPortalResourceNotes] = useState('');
+  const [editingResourceId, setEditingResourceId] = useState('');
+  const [editProject, setEditProject] = useState('');
+  const [editEnvironment, setEditEnvironment] = useState('');
+  const [editName, setEditName] = useState('');
+  const [editUrl, setEditUrl] = useState('');
+  const [editType, setEditType] = useState('');
+  const [editNotes, setEditNotes] = useState('');
 
   const [organization, setOrganization] = useState('');
   const [pat, setPat] = useState('');
@@ -297,6 +304,61 @@ function App() {
       await fetch(`${API}/api/admin/users/${userId}/approve?auth_token=${authToken}`, { method: 'POST' });
       await loadPendingUsers();
       setStatus('User approved.');
+    } finally {
+      setIsBusy(false);
+    }
+  };
+
+  const startEditResource = (resource: DashboardResourceItem) => {
+    setEditingResourceId(resource.id);
+    setEditProject(resource.project);
+    setEditEnvironment(resource.environment);
+    setEditName(resource.name);
+    setEditUrl(resource.url);
+    setEditType(resource.resource_type ?? '');
+    setEditNotes(resource.notes ?? '');
+  };
+
+  const cancelEditResource = () => {
+    setEditingResourceId('');
+    setEditProject('');
+    setEditEnvironment('');
+    setEditName('');
+    setEditUrl('');
+    setEditType('');
+    setEditNotes('');
+  };
+
+  const updateDashboardResource = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!authToken || !selectedDashboardId || !editingResourceId) return;
+
+    setIsBusy(true);
+    try {
+      const response = await fetch(
+        `${API}/api/dashboards/${selectedDashboardId}/resources/${editingResourceId}?auth_token=${authToken}`,
+        {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            project: editProject,
+            environment: editEnvironment,
+            name: editName,
+            url: editUrl,
+            resource_type: editType || undefined,
+            notes: editNotes || undefined,
+          }),
+        },
+      );
+
+      if (!response.ok) {
+        setStatus('Unable to update resource card. Admin or owner access is required.');
+        return;
+      }
+
+      await loadDashboardResources(selectedDashboardId);
+      setStatus('Resource card updated.');
+      cancelEditResource();
     } finally {
       setIsBusy(false);
     }
@@ -501,6 +563,7 @@ function App() {
 
           <section className="card">
             <h3>Add Resource Card (Manual)</h3>
+            <p className="muted">Add cards by project and environment (e.g., GPMD → stage/prod/preprod).</p>
             <label>Select Dashboard</label>
             <select
               value={selectedDashboardId}
@@ -516,26 +579,44 @@ function App() {
             </select>
 
             <form className="resource-form" onSubmit={createDashboardResource}>
-              <label>Project</label><input value={portalProject} onChange={(e) => setPortalProject(e.target.value)} required />
-              <label>Environment</label><input value={portalEnvironment} onChange={(e) => setPortalEnvironment(e.target.value)} required />
-              <label>Resource Name</label><input value={portalResourceName} onChange={(e) => setPortalResourceName(e.target.value)} required />
-              <label>Resource URL</label><input value={portalResourceUrl} onChange={(e) => setPortalResourceUrl(e.target.value)} required />
+              <label>Project</label><input placeholder="e.g. gpmd" value={portalProject} onChange={(e) => setPortalProject(e.target.value)} required />
+              <label>Environment</label><input placeholder="stage / prod / preprod" value={portalEnvironment} onChange={(e) => setPortalEnvironment(e.target.value)} required />
+              <label>Resource Name</label><input placeholder="storage-account-name" value={portalResourceName} onChange={(e) => setPortalResourceName(e.target.value)} required />
+              <label>Resource URL</label><input placeholder="https://..." value={portalResourceUrl} onChange={(e) => setPortalResourceUrl(e.target.value)} required />
               <label>Resource Type</label><input value={portalResourceType} onChange={(e) => setPortalResourceType(e.target.value)} />
               <label>Notes</label><input value={portalResourceNotes} onChange={(e) => setPortalResourceNotes(e.target.value)} />
               <button type="submit" disabled={isBusy || !selectedDashboardId}>Add Card</button>
             </form>
 
             <button className="small" onClick={() => void loadDashboardResources()} disabled={isBusy || !selectedDashboardId}>Refresh Resource Cards</button>
+            {dashboardResources.length === 0 ? <p className="muted">No resource cards yet for this dashboard.</p> : null}
             <ul className="resource-list">
               {dashboardResources.map((r) => (
                 <li key={r.id} className="resource-item">
-                  <p><strong>{r.project}</strong> · {r.environment}</p>
+                  <p><strong>{r.project}</strong> · <strong>{r.environment}</strong></p>
                   <p><strong>{r.name}</strong>{r.resource_type ? ` · ${r.resource_type}` : ''}</p>
                   <a href={r.url} target="_blank" rel="noreferrer">{r.url}</a>
                   {r.notes ? <p className="muted">{r.notes}</p> : null}
+                  {isAdmin || r.owner_email === userEmail ? (
+                    <button className="small" onClick={() => startEditResource(r)} disabled={isBusy}>Edit</button>
+                  ) : null}
                 </li>
               ))}
             </ul>
+
+            {editingResourceId ? (
+              <form className="resource-form" onSubmit={updateDashboardResource}>
+                <h4>Edit Resource Card</h4>
+                <label>Project</label><input value={editProject} onChange={(e) => setEditProject(e.target.value)} required />
+                <label>Environment</label><input value={editEnvironment} onChange={(e) => setEditEnvironment(e.target.value)} required />
+                <label>Resource Name</label><input value={editName} onChange={(e) => setEditName(e.target.value)} required />
+                <label>Resource URL</label><input value={editUrl} onChange={(e) => setEditUrl(e.target.value)} required />
+                <label>Resource Type</label><input value={editType} onChange={(e) => setEditType(e.target.value)} />
+                <label>Notes</label><input value={editNotes} onChange={(e) => setEditNotes(e.target.value)} />
+                <button type="submit" disabled={isBusy}>Save Changes</button>
+                <button type="button" className="small" onClick={cancelEditResource}>Cancel</button>
+              </form>
+            ) : null}
           </section>
 
           {isAdmin ? (

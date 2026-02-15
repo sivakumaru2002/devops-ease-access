@@ -78,3 +78,4 @@ You can now add project/environment resource cards (name + URL + type + notes) f
    - **DevOps Page** (user manages org + PAT and connects)
 3. DevOps org/PAT are stored against the logged-in user in MongoDB.
 4. If PAT expires, user can update PAT from DevOps Page and reconnect.
+5. In Dashboard Portal, admin can edit existing manual resource cards.
