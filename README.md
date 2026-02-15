@@ -79,3 +79,12 @@ You can now add project/environment resource cards (name + URL + type + notes) f
 3. DevOps org/PAT are stored against the logged-in user in MongoDB.
 4. If PAT expires, user can update PAT from DevOps Page and reconnect.
 5. In Dashboard Portal, admin can edit existing manual resource cards.
+
+
+## Edge-case handling added
+
+- Dashboard resources now return 404 when dashboard ID is invalid.
+- Dashboard list refresh now re-selects a valid dashboard if previous selection was deleted/invalid.
+- Empty dashboard or resource states are handled explicitly in UI.
+- Resource cards are grouped by project + environment for easier scanning.
+- Admin can edit any resource card; owner can edit own card.
