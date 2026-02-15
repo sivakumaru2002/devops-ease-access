@@ -110,6 +110,11 @@ function App() {
   const [isApproved, setIsApproved] = useState(false);
   const [loginEmailOrUser, setLoginEmailOrUser] = useState('admin@gmail.com');
   const [loginPassword, setLoginPassword] = useState('admin');
+  const [showRegister, setShowRegister] = useState(false);
+  const [registerEmail, setRegisterEmail] = useState('');
+  const [registerUsername, setRegisterUsername] = useState('');
+  const [registerPassword, setRegisterPassword] = useState('');
+  const [registerConfirmPassword, setRegisterConfirmPassword] = useState('');
 
   const [dashboards, setDashboards] = useState<DashboardItem[]>([]);
   const [pendingUsers, setPendingUsers] = useState<PendingUser[]>([]);
@@ -130,6 +135,8 @@ function App() {
   const [editUrl, setEditUrl] = useState('');
   const [editType, setEditType] = useState('');
   const [editNotes, setEditNotes] = useState('');
+  const [selectedEnvironmentFilter, setSelectedEnvironmentFilter] = useState('all');
+  const [resourceSearchQuery, setResourceSearchQuery] = useState('');
 
   const [organization, setOrganization] = useState('');
   const [pat, setPat] = useState('');
@@ -270,7 +277,7 @@ function App() {
         body: JSON.stringify({ email_or_username: loginEmailOrUser, password: loginPassword }),
       });
       if (!response.ok) {
-        setStatus('Dashboard login failed.');
+        setStatus('❌ Login failed. Please check your credentials.');
         return;
       }
       const payload = (await response.json()) as AuthResponse;
@@ -280,15 +287,59 @@ function App() {
       setIsAdmin(payload.is_admin);
       setIsApproved(payload.approved);
       if (!payload.approved) {
-        setStatus('Your account is waiting for admin approval.');
+        setStatus('⏳ Your account is waiting for admin approval.');
         return;
       }
       await loadDashboards(payload.auth_token);
       if (payload.is_admin) await loadPendingUsers(payload.auth_token);
-      setStatus(`Welcome ${payload.username}. Choose Dashboard or DevOps.`);
+      setStatus(`✅ Welcome ${payload.username}! Choose Dashboard or DevOps.`);
       setStep('homeChoice');
     } catch {
-      setStatus('Network error during login.');
+      setStatus('❌ Network error during login.');
+    } finally {
+      setIsBusy(false);
+    }
+  };
+
+  const registerDashboardUser = async (event: FormEvent) => {
+    event.preventDefault();
+
+    if (registerPassword !== registerConfirmPassword) {
+      setStatus('❌ Passwords do not match.');
+      return;
+    }
+
+    if (registerPassword.length < 4) {
+      setStatus('❌ Password must be at least 4 characters.');
+      return;
+    }
+
+    setIsBusy(true);
+    try {
+      const response = await fetch(`${API}/api/auth/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: registerEmail,
+          username: registerUsername,
+          password: registerPassword,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ detail: 'Registration failed' }));
+        setStatus(`❌ ${errorData.detail || 'Registration failed. Email or username may already exist.'}`);
+        return;
+      }
+
+      setStatus('✅ Registration successful! Your account is pending admin approval. You can try logging in once approved.');
+      setRegisterEmail('');
+      setRegisterUsername('');
+      setRegisterPassword('');
+      setRegisterConfirmPassword('');
+      setShowRegister(false);
+    } catch {
+      setStatus('❌ Network error during registration.');
     } finally {
       setIsBusy(false);
     }
@@ -526,15 +577,46 @@ function App() {
     }
   };
 
+  const availableEnvironments = useMemo(() => {
+    const envSet = new Set<string>();
+    for (const item of dashboardResources) {
+      envSet.add(item.environment);
+    }
+    return Array.from(envSet).sort();
+  }, [dashboardResources]);
+
+  const filteredDashboardResources = useMemo(() => {
+    let filtered = dashboardResources;
+
+    // Filter by environment
+    if (selectedEnvironmentFilter !== 'all') {
+      filtered = filtered.filter(item => item.environment === selectedEnvironmentFilter);
+    }
+
+    // Filter by search query
+    if (resourceSearchQuery.trim()) {
+      const query = resourceSearchQuery.toLowerCase();
+      filtered = filtered.filter(item =>
+        item.name.toLowerCase().includes(query) ||
+        item.url.toLowerCase().includes(query) ||
+        item.project.toLowerCase().includes(query) ||
+        (item.resource_type && item.resource_type.toLowerCase().includes(query)) ||
+        (item.notes && item.notes.toLowerCase().includes(query))
+      );
+    }
+
+    return filtered;
+  }, [dashboardResources, selectedEnvironmentFilter, resourceSearchQuery]);
+
   const groupedDashboardResources = useMemo(() => {
     const grouped: Record<string, DashboardResourceItem[]> = {};
-    for (const item of dashboardResources) {
+    for (const item of filteredDashboardResources) {
       const key = `${item.project}::${item.environment}`;
       grouped[key] = grouped[key] ?? [];
       grouped[key].push(item);
     }
     return grouped;
-  }, [dashboardResources]);
+  }, [filteredDashboardResources]);
 
   return (
     <>
@@ -547,15 +629,109 @@ function App() {
       {step === 'userAuth' ? (
         <main className="single-page">
           <section className="card login-card">
-            <h2>Dashboard Login</h2>
-            <form onSubmit={loginDashboardUser}>
-              <label>Email or Username</label>
-              <input value={loginEmailOrUser} onChange={(e) => setLoginEmailOrUser(e.target.value)} required />
-              <label>Password</label>
-              <input type="password" value={loginPassword} onChange={(e) => setLoginPassword(e.target.value)} required />
-              <button type="submit" disabled={isBusy}>{isBusy ? 'Please wait...' : 'Login'}</button>
-            </form>
-            <p className="muted">Ask admin to create/approve your account. Default admin: admin@gmail.com / admin.</p>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+              <h2>{showRegister ? '📝 Create Account' : '🔐 Dashboard Login'}</h2>
+              <button
+                type="button"
+                className="small btn-secondary"
+                onClick={() => {
+                  setShowRegister(!showRegister);
+                  setStatus(showRegister ? 'Sign in to dashboard account.' : 'Create a new account for dashboard access.');
+                }}
+              >
+                {showRegister ? '← Back to Login' : '✨ Sign Up'}
+              </button>
+            </div>
+
+            {!showRegister ? (
+              <>
+                <form onSubmit={loginDashboardUser}>
+                  <label>Email or Username</label>
+                  <input
+                    type="text"
+                    placeholder="admin@gmail.com"
+                    value={loginEmailOrUser}
+                    onChange={(e) => setLoginEmailOrUser(e.target.value)}
+                    required
+                    autoComplete="username"
+                  />
+                  <label>Password</label>
+                  <input
+                    type="password"
+                    placeholder="Enter your password"
+                    value={loginPassword}
+                    onChange={(e) => setLoginPassword(e.target.value)}
+                    required
+                    autoComplete="current-password"
+                  />
+                  <button type="submit" disabled={isBusy}>
+                    {isBusy ? '⏳ Signing in...' : '🚀 Login'}
+                  </button>
+                </form>
+                <div style={{ marginTop: '1rem', padding: '1rem', background: 'rgba(99, 142, 255, 0.1)', borderRadius: '8px', border: '1px solid rgba(99, 142, 255, 0.2)' }}>
+                  <p className="muted" style={{ margin: 0, fontSize: '0.875rem' }}>
+                    💡 <strong>Default admin:</strong> admin@gmail.com / admin<br />
+                    👤 <strong>New user?</strong> Click "Sign Up" to create an account
+                  </p>
+                </div>
+              </>
+            ) : (
+              <>
+                <p className="muted" style={{ marginBottom: '1rem' }}>
+                  Create your account below. Your account will be pending until an admin approves it.
+                </p>
+                <form onSubmit={registerDashboardUser}>
+                  <label>Email Address</label>
+                  <input
+                    type="email"
+                    placeholder="your.email@company.com"
+                    value={registerEmail}
+                    onChange={(e) => setRegisterEmail(e.target.value)}
+                    required
+                    autoComplete="email"
+                  />
+                  <label>Username</label>
+                  <input
+                    type="text"
+                    placeholder="Choose a username (min 3 characters)"
+                    value={registerUsername}
+                    onChange={(e) => setRegisterUsername(e.target.value)}
+                    required
+                    minLength={3}
+                    autoComplete="username"
+                  />
+                  <label>Password</label>
+                  <input
+                    type="password"
+                    placeholder="Create a password (min 4 characters)"
+                    value={registerPassword}
+                    onChange={(e) => setRegisterPassword(e.target.value)}
+                    required
+                    minLength={4}
+                    autoComplete="new-password"
+                  />
+                  <label>Confirm Password</label>
+                  <input
+                    type="password"
+                    placeholder="Re-enter your password"
+                    value={registerConfirmPassword}
+                    onChange={(e) => setRegisterConfirmPassword(e.target.value)}
+                    required
+                    minLength={4}
+                    autoComplete="new-password"
+                  />
+                  <button type="submit" className="btn-success" disabled={isBusy}>
+                    {isBusy ? '⏳ Creating account...' : '✨ Register'}
+                  </button>
+                </form>
+                <div style={{ marginTop: '1rem', padding: '1rem', background: 'rgba(16, 185, 129, 0.1)', borderRadius: '8px', border: '1px solid rgba(16, 185, 129, 0.2)' }}>
+                  <p className="muted" style={{ margin: 0, fontSize: '0.875rem' }}>
+                    ℹ️ After registration, your account will be <strong>pending approval</strong>.<br />
+                    👑 An admin will review and approve your account before you can access the dashboard.
+                  </p>
+                </div>
+              </>
+            )}
           </section>
         </main>
       ) : null}
@@ -579,21 +755,33 @@ function App() {
         <main className="single-page">
           <section className="card">
             <div className="row-between">
-              <h2>Dashboards</h2>
-              <button className="small" onClick={() => setStep('homeChoice')}>Back</button>
+              <h2>Dashboard Portal</h2>
+              <button className="small btn-secondary" onClick={() => setStep('homeChoice')}>← Back</button>
             </div>
-            <p>{userEmail} {isAdmin ? '(Admin)' : '(Viewer)'}</p>
-            <button className="small" onClick={() => void loadDashboards()} disabled={isBusy}>Refresh Dashboards</button>
-            <ul className="resource-list">
-              {dashboards.map((d) => (
-                <li key={d.id} className="resource-item"><strong>{d.name}</strong><p className="muted">{d.description ?? 'No description'}</p></li>
-              ))}
-            </ul>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1rem' }}>
+              <p style={{ margin: 0 }}>{userEmail}</p>
+              <span className={isAdmin ? 'badge badge-admin' : 'badge badge-user'}>
+                {isAdmin ? '👑 ADMIN' : '👤 USER'}
+              </span>
+            </div>
+            {!isAdmin ? <p className="muted" style={{ padding: '0.75rem', background: 'rgba(99, 142, 255, 0.1)', borderRadius: '8px', border: '1px solid rgba(99, 142, 255, 0.2)' }}>📋 You have view-only access. Only admins can create dashboards and add resources.</p> : null}
+            <button className="small btn-secondary" onClick={() => void loadDashboards()} disabled={isBusy}>🔄 Refresh Dashboards</button>
+            {dashboards.length === 0 ? <p className="muted">No dashboards available yet.</p> : (
+              <ul className="resource-list">
+                {dashboards.map((d) => (
+                  <li key={d.id} className="resource-item">
+                    <strong>{d.name}</strong>
+                    <p className="muted">{d.description ?? 'No description'}</p>
+                  </li>
+                ))}
+              </ul>
+            )}
           </section>
 
           <section className="card">
-            <h3>Add Resource Card (Manual)</h3>
-            <p className="muted">Add cards by project and environment (e.g., GPMD → stage/prod/preprod).</p>
+            <div className="row-between">
+              <h3>{isAdmin ? '📦 Manage Resources' : '📦 View Resources'}</h3>
+            </div>
             <label>Select Dashboard</label>
             <select
               value={selectedDashboardId}
@@ -608,19 +796,57 @@ function App() {
               ))}
             </select>
 
-            <form className="resource-form" onSubmit={createDashboardResource}>
-              <label>Project</label><input placeholder="e.g. gpmd" value={portalProject} onChange={(e) => setPortalProject(e.target.value)} required />
-              <label>Environment</label><input placeholder="stage / prod / preprod" value={portalEnvironment} onChange={(e) => setPortalEnvironment(e.target.value)} required />
-              <label>Resource Name</label><input placeholder="storage-account-name" value={portalResourceName} onChange={(e) => setPortalResourceName(e.target.value)} required />
-              <label>Resource URL</label><input placeholder="https://..." value={portalResourceUrl} onChange={(e) => setPortalResourceUrl(e.target.value)} required />
-              <label>Resource Type</label><input value={portalResourceType} onChange={(e) => setPortalResourceType(e.target.value)} />
-              <label>Notes</label><input value={portalResourceNotes} onChange={(e) => setPortalResourceNotes(e.target.value)} />
-              <button type="submit" disabled={isBusy || !selectedDashboardId}>Add Card</button>
-            </form>
+            {isAdmin ? (
+              <>
+                <h4 style={{ marginTop: '1.5rem' }}>➕ Add New Resource</h4>
+                <p className="muted">Add resource cards by project and environment (e.g., GPMD → stage/prod/preprod).</p>
+                <form className="resource-form" onSubmit={createDashboardResource}>
+                  <label>Project</label><input placeholder="e.g. gpmd" value={portalProject} onChange={(e) => setPortalProject(e.target.value)} required disabled={!selectedDashboardId} />
+                  <label>Environment</label><input placeholder="stage / prod / preprod" value={portalEnvironment} onChange={(e) => setPortalEnvironment(e.target.value)} required disabled={!selectedDashboardId} />
+                  <label>Resource Name</label><input placeholder="storage-account-name" value={portalResourceName} onChange={(e) => setPortalResourceName(e.target.value)} required disabled={!selectedDashboardId} />
+                  <label>Resource URL</label><input placeholder="https://..." value={portalResourceUrl} onChange={(e) => setPortalResourceUrl(e.target.value)} required disabled={!selectedDashboardId} />
+                  <label>Resource Type</label><input placeholder="e.g., Storage, Database" value={portalResourceType} onChange={(e) => setPortalResourceType(e.target.value)} disabled={!selectedDashboardId} />
+                  <label>Notes</label><input placeholder="Optional notes" value={portalResourceNotes} onChange={(e) => setPortalResourceNotes(e.target.value)} disabled={!selectedDashboardId} />
+                  <button type="submit" disabled={isBusy || !selectedDashboardId}>{isBusy ? '⏳ Adding...' : '➕ Add Resource'}</button>
+                </form>
+              </>
+            ) : null}
 
-            <button className="small" onClick={() => void loadDashboardResources()} disabled={isBusy || !selectedDashboardId}>Refresh Resource Cards</button>
-            <p className="muted">Resource cards shown below are shared for the selected dashboard.</p>
-            {dashboardResources.length === 0 ? <p className="muted">No resource cards yet for this dashboard.</p> : null}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginTop: '1.5rem', flexWrap: 'wrap' }}>
+              <h4 style={{ margin: 0 }}>📋 Resources in Selected Dashboard</h4>
+              {selectedDashboardId && dashboardResources.length > 0 ? (
+                <span className="badge badge-user" style={{ fontSize: '0.75rem' }}>
+                  {filteredDashboardResources.length} {selectedEnvironmentFilter === 'all' ? 'total' : `in ${selectedEnvironmentFilter}`}
+                </span>
+              ) : null}
+            </div>
+            <div style={{ display: 'flex', gap: '1rem', alignItems: 'flex-end', flexWrap: 'wrap' }}>
+              <div style={{ flex: '1 1 250px' }}>
+                <label>🔍 Search Resources</label>
+                <input
+                  type="text"
+                  placeholder="Search by name, URL, type, or notes..."
+                  value={resourceSearchQuery}
+                  onChange={(e) => setResourceSearchQuery(e.target.value)}
+                  disabled={!selectedDashboardId || dashboardResources.length === 0}
+                />
+              </div>
+              <div style={{ flex: '1 1 200px' }}>
+                <label>Filter by Environment</label>
+                <select
+                  value={selectedEnvironmentFilter}
+                  onChange={(e) => setSelectedEnvironmentFilter(e.target.value)}
+                  disabled={!selectedDashboardId || dashboardResources.length === 0}
+                >
+                  <option value="all">🌐 All Environments</option>
+                  {availableEnvironments.map((env) => (
+                    <option key={env} value={env}>{env}</option>
+                  ))}
+                </select>
+              </div>
+              <button className="small btn-secondary" onClick={() => void loadDashboardResources()} disabled={isBusy || !selectedDashboardId}>🔄 Refresh</button>
+            </div>
+            {!selectedDashboardId ? <p className="muted">Select a dashboard above to view its resources.</p> : dashboardResources.length === 0 ? <p className="muted" style={{ padding: '2rem', textAlign: 'center', background: 'rgba(15, 20, 32, 0.4)', borderRadius: '8px' }}>📭 No resources added yet for this dashboard.</p> : filteredDashboardResources.length === 0 ? <p className="muted" style={{ padding: '2rem', textAlign: 'center', background: 'rgba(15, 20, 32, 0.4)', borderRadius: '8px' }}>🔍 No resources found matching your {resourceSearchQuery ? 'search' : 'filters'}. {resourceSearchQuery ? `Try a different search term.` : selectedEnvironmentFilter !== 'all' ? `No resources in environment: ${selectedEnvironmentFilter}` : ''}</p> : null}
             <div className="resource-groups">
               {Object.entries(groupedDashboardResources).map(([key, items]) => {
                 const [project, environment] = key.split('::');
@@ -634,7 +860,7 @@ function App() {
                           <a href={r.url} target="_blank" rel="noreferrer">{r.url}</a>
                           {r.notes ? <p className="muted">{r.notes}</p> : null}
                           {isAdmin || r.owner_email === userEmail ? (
-                            <button className="small" onClick={() => startEditResource(r)} disabled={isBusy}>Edit</button>
+                            <button className="small btn-warning" onClick={() => startEditResource(r)} disabled={isBusy}>✏️ Edit</button>
                           ) : null}
                         </li>
                       ))}
@@ -653,30 +879,33 @@ function App() {
                 <label>Resource URL</label><input value={editUrl} onChange={(e) => setEditUrl(e.target.value)} required />
                 <label>Resource Type</label><input value={editType} onChange={(e) => setEditType(e.target.value)} />
                 <label>Notes</label><input value={editNotes} onChange={(e) => setEditNotes(e.target.value)} />
-                <button type="submit" disabled={isBusy}>Save Changes</button>
-                <button type="button" className="small" onClick={cancelEditResource}>Cancel</button>
+                <button type="submit" className="btn-success" disabled={isBusy}>{isBusy ? '⏳ Saving...' : '💾 Save Changes'}</button>
+                <button type="button" className="small btn-secondary" onClick={cancelEditResource}>❌ Cancel</button>
               </form>
             ) : null}
           </section>
 
           {isAdmin ? (
             <section className="card">
-              <h3>Create Dashboard (Admin)</h3>
+              <h3>👑 Admin Controls</h3>
+              <h4>➕ Create New Dashboard</h4>
+              <p className="muted">Create a new dashboard to organize project resources.</p>
               <form onSubmit={createDashboard}>
-                <label>Name</label>
-                <input value={dashboardName} onChange={(e) => setDashboardName(e.target.value)} required />
-                <label>Description</label>
-                <input value={dashboardDescription} onChange={(e) => setDashboardDescription(e.target.value)} />
-                <button type="submit" disabled={isBusy}>Create</button>
+                <label>Dashboard Name</label>
+                <input placeholder="e.g., Production Environment" value={dashboardName} onChange={(e) => setDashboardName(e.target.value)} required />
+                <label>Description (Optional)</label>
+                <input placeholder="Brief description of this dashboard" value={dashboardDescription} onChange={(e) => setDashboardDescription(e.target.value)} />
+                <button type="submit" className="btn-success" disabled={isBusy}>{isBusy ? '⏳ Creating...' : '✨ Create Dashboard'}</button>
               </form>
 
-              <h3>Pending Users</h3>
-              <button className="small" onClick={() => void loadPendingUsers()} disabled={isBusy}>Refresh Pending</button>
+              <h4 style={{ marginTop: '2rem' }}>👥 Pending User Approvals</h4>
+              <button className="small btn-secondary" onClick={() => void loadPendingUsers()} disabled={isBusy}>🔄 Refresh Pending</button>
+              {pendingUsers.length === 0 ? <p className="muted">✅ No pending user approvals.</p> : null}
               <ul className="resource-list">
                 {pendingUsers.map((u) => (
                   <li key={u.id} className="resource-item">
                     <p><strong>{u.username}</strong> · {u.email}</p>
-                    <button className="small" onClick={() => void approveUser(u.id)}>Approve</button>
+                    <button className="small btn-success" onClick={() => void approveUser(u.id)}>✅ Approve</button>
                   </li>
                 ))}
               </ul>
@@ -737,17 +966,10 @@ function App() {
 
           <section className="card wide">
             <div className="row-between">
-              <h2>Resource Cards • {selectedProject}</h2>
-              <button className="small" onClick={() => void loadResources(selectedProject ?? undefined)}>Refresh</button>
+              <h2>📦 Resource Cards • {selectedProject}</h2>
+              <button className="small btn-secondary" onClick={() => void loadResources(selectedProject ?? undefined)}>🔄 Refresh</button>
             </div>
-            <form className="resource-form" onSubmit={createResource}>
-              <label>Environment</label><input value={resourceEnvironment} onChange={(e) => setResourceEnvironment(e.target.value)} required />
-              <label>Resource Name</label><input value={resourceName} onChange={(e) => setResourceName(e.target.value)} required />
-              <label>Resource URL</label><input value={resourceUrl} onChange={(e) => setResourceUrl(e.target.value)} required />
-              <label>Resource Type</label><input value={resourceType} onChange={(e) => setResourceType(e.target.value)} />
-              <label>Notes</label><input value={resourceNotes} onChange={(e) => setResourceNotes(e.target.value)} />
-              <button type="submit" disabled={isBusy}>Add Resource</button>
-            </form>
+            <p className="muted">Resources managed in Dashboard Portal. View and access your project resources below.</p>
 
             {Object.entries(resourcesByEnvironment).map(([env, items]) => (
               <article key={env} className="resource-group">

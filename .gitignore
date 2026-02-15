@@ -2,3 +2,21 @@ __pycache__/
 *.pyc
 frontend/node_modules/
 frontend/dist/
+.venv
+
+# Environment variables and secrets
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
