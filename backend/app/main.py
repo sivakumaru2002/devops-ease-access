@@ -195,6 +195,8 @@ async def list_dashboard_resources(
     environment: str | None = None,
 ) -> list[DashboardResourceItem]:
     _require_approved_user(auth_token)
+    if not user_store.get_dashboard(dashboard_id):
+        raise HTTPException(404, "Dashboard not found")
     # Dashboard resource cards are shared for all approved users on the same dashboard.
     rows = resource_store.list_resources(
         dashboard_id=dashboard_id,
@@ -211,6 +213,8 @@ async def create_dashboard_resource(
     auth_token: str,
 ) -> DashboardResourceItem:
     user = _require_approved_user(auth_token)
+    if not user_store.get_dashboard(dashboard_id):
+        raise HTTPException(404, "Dashboard not found")
 
     created = resource_store.add_resource(
         {
@@ -235,6 +239,8 @@ async def update_dashboard_resource(
     auth_token: str,
 ) -> DashboardResourceItem:
     user = _require_approved_user(auth_token)
+    if not user_store.get_dashboard(dashboard_id):
+        raise HTTPException(404, "Dashboard not found")
     existing = resource_store.get_resource(resource_id)
     if not existing or existing.get("dashboard_id") != dashboard_id:
         raise HTTPException(404, "Resource card not found")

@@ -148,6 +148,26 @@ class UserStore:
         return sorted(self._dashboards_mem, key=lambda d: d["created_at"], reverse=True)
 
 
+    def get_dashboard(self, dashboard_id: str) -> dict[str, Any] | None:
+        if self._dashboards_collection is not None:
+            from bson import ObjectId
+
+            try:
+                oid = ObjectId(dashboard_id)
+            except Exception:
+                return None
+            row = self._dashboards_collection.find_one({"_id": oid})
+            if not row:
+                return None
+            row["id"] = str(row.pop("_id"))
+            return row
+
+        for dashboard in self._dashboards_mem:
+            if dashboard.get("id") == dashboard_id:
+                return dashboard
+        return None
+
+
     def set_devops_credentials(self, email: str, organization: str, encrypted_pat: str) -> dict[str, Any] | None:
         email_n = self._normalize(email)
         now = datetime.utcnow()

@@ -175,13 +175,24 @@ function App() {
   const loadDashboards = async (token = authToken) => {
     if (!token) return;
     const response = await fetch(`${API}/api/dashboards?auth_token=${token}`);
-    if (!response.ok) return;
+    if (!response.ok) {
+      setStatus('Unable to load dashboards.');
+      return;
+    }
+
     const items = (await response.json()) as DashboardItem[];
     setDashboards(items);
-    if (!selectedDashboardId && items.length > 0) {
-      setSelectedDashboardId(items[0].id);
-      await loadDashboardResources(items[0].id, token);
+
+    if (items.length === 0) {
+      setSelectedDashboardId('');
+      setDashboardResources([]);
+      return;
     }
+
+    const stillExists = items.some((item) => item.id === selectedDashboardId);
+    const nextDashboardId = stillExists ? selectedDashboardId : items[0].id;
+    setSelectedDashboardId(nextDashboardId);
+    await loadDashboardResources(nextDashboardId, token);
   };
 
   const loadPendingUsers = async (token = authToken) => {
@@ -191,9 +202,18 @@ function App() {
   };
 
   const loadDashboardResources = async (dashboardId = selectedDashboardId, token = authToken) => {
-    if (!token || !dashboardId) return;
+    if (!token || !dashboardId) {
+      setDashboardResources([]);
+      return;
+    }
+
     const response = await fetch(`${API}/api/dashboards/${dashboardId}/resources?auth_token=${token}`);
-    if (response.ok) setDashboardResources((await response.json()) as DashboardResourceItem[]);
+    if (!response.ok) {
+      setDashboardResources([]);
+      setStatus('Unable to load resource cards for this dashboard.');
+      return;
+    }
+    setDashboardResources((await response.json()) as DashboardResourceItem[]);
   };
 
   const createDashboardResource = async (event: FormEvent) => {
@@ -214,7 +234,7 @@ function App() {
         }),
       });
       if (!response.ok) {
-        setStatus('Failed to add dashboard resource card.');
+        setStatus('Failed to add dashboard resource card. Check dashboard selection and required fields.');
         return;
       }
       setPortalProject('');
@@ -506,6 +526,16 @@ function App() {
     }
   };
 
+  const groupedDashboardResources = useMemo(() => {
+    const grouped: Record<string, DashboardResourceItem[]> = {};
+    for (const item of dashboardResources) {
+      const key = `${item.project}::${item.environment}`;
+      grouped[key] = grouped[key] ?? [];
+      grouped[key].push(item);
+    }
+    return grouped;
+  }, [dashboardResources]);
+
   return (
     <>
       <header className="hero">
@@ -591,19 +621,28 @@ function App() {
             <button className="small" onClick={() => void loadDashboardResources()} disabled={isBusy || !selectedDashboardId}>Refresh Resource Cards</button>
             <p className="muted">Resource cards shown below are shared for the selected dashboard.</p>
             {dashboardResources.length === 0 ? <p className="muted">No resource cards yet for this dashboard.</p> : null}
-            <ul className="resource-list">
-              {dashboardResources.map((r) => (
-                <li key={r.id} className="resource-item">
-                  <p><strong>{r.project}</strong> · <strong>{r.environment}</strong></p>
-                  <p><strong>{r.name}</strong>{r.resource_type ? ` · ${r.resource_type}` : ''}</p>
-                  <a href={r.url} target="_blank" rel="noreferrer">{r.url}</a>
-                  {r.notes ? <p className="muted">{r.notes}</p> : null}
-                  {isAdmin || r.owner_email === userEmail ? (
-                    <button className="small" onClick={() => startEditResource(r)} disabled={isBusy}>Edit</button>
-                  ) : null}
-                </li>
-              ))}
-            </ul>
+            <div className="resource-groups">
+              {Object.entries(groupedDashboardResources).map(([key, items]) => {
+                const [project, environment] = key.split('::');
+                return (
+                  <article key={key} className="resource-group">
+                    <h4>{project} · {environment}</h4>
+                    <ul className="resource-list">
+                      {items.map((r) => (
+                        <li key={r.id} className="resource-item">
+                          <p><strong>{r.name}</strong>{r.resource_type ? ` · ${r.resource_type}` : ''}</p>
+                          <a href={r.url} target="_blank" rel="noreferrer">{r.url}</a>
+                          {r.notes ? <p className="muted">{r.notes}</p> : null}
+                          {isAdmin || r.owner_email === userEmail ? (
+                            <button className="small" onClick={() => startEditResource(r)} disabled={isBusy}>Edit</button>
+                          ) : null}
+                        </li>
+                      ))}
+                    </ul>
+                  </article>
+                );
+              })}
+            </div>
 
             {editingResourceId ? (
               <form className="resource-form" onSubmit={updateDashboardResource}>
