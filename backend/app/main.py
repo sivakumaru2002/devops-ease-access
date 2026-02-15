@@ -194,10 +194,9 @@ async def list_dashboard_resources(
     project: str | None = None,
     environment: str | None = None,
 ) -> list[DashboardResourceItem]:
-    user = _require_approved_user(auth_token)
-    owner_email = None if user.get("is_admin") else user["email"]
+    _require_approved_user(auth_token)
+    # Dashboard resource cards are shared for all approved users on the same dashboard.
     rows = resource_store.list_resources(
-        owner_email=owner_email,
         dashboard_id=dashboard_id,
         project=project,
         environment=environment,

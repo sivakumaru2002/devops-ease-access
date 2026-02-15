@@ -589,6 +589,7 @@ function App() {
             </form>
 
             <button className="small" onClick={() => void loadDashboardResources()} disabled={isBusy || !selectedDashboardId}>Refresh Resource Cards</button>
+            <p className="muted">Resource cards shown below are shared for the selected dashboard.</p>
             {dashboardResources.length === 0 ? <p className="muted">No resource cards yet for this dashboard.</p> : null}
             <ul className="resource-list">
               {dashboardResources.map((r) => (
