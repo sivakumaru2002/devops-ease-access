@@ -197,6 +197,17 @@ label {
   letter-spacing: 0.01em;
 }
 
+.login-card,
+.projects-card {
+  max-width: 560px;
+  width: 100%;
+  justify-self: center;
+}
+
+.wide { grid-column: span 2; }
+
+label { display: block; margin-bottom: 0.35rem; }
+
 input,
 select,
 textarea {
@@ -629,9 +640,12 @@ button.btn-secondary:hover {
   border-radius: 4px;
 }
 
-table {
-  width: 100%;
-  border-collapse: collapse;
+.project-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  max-height: 460px;
+  overflow: auto;
 }
 
 th,
