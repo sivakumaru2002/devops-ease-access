@@ -68,3 +68,13 @@ You can now add project/environment resource cards (name + URL + type + notes) f
 - Admin can approve users and create dashboard entries.
 - Approved users can choose **Dashboard** or **DevOps** on second page.
 - DevOps PAT connection now requires approved dashboard login first.
+
+
+## UX Flow (Requested)
+
+1. Login page is only for dashboard user login.
+2. Second page has two cards:
+   - **Dashboard Portal** (admin creates dashboard cards; users view)
+   - **DevOps Page** (user manages org + PAT and connects)
+3. DevOps org/PAT are stored against the logged-in user in MongoDB.
+4. If PAT expires, user can update PAT from DevOps Page and reconnect.

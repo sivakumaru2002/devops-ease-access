@@ -146,3 +146,42 @@ class UserStore:
                 result.append(row)
             return result
         return sorted(self._dashboards_mem, key=lambda d: d["created_at"], reverse=True)
+
+
+    def set_devops_credentials(self, email: str, organization: str, encrypted_pat: str) -> dict[str, Any] | None:
+        email_n = self._normalize(email)
+        now = datetime.utcnow()
+
+        if self._users_collection is not None:
+            self._users_collection.update_one(
+                {"email": email_n},
+                {"$set": {
+                    "devops_org": organization.strip(),
+                    "devops_pat_encrypted": encrypted_pat,
+                    "devops_updated_at": now,
+                }},
+            )
+            row = self._users_collection.find_one({"email": email_n})
+            if not row:
+                return None
+            row["id"] = str(row.pop("_id"))
+            return row
+
+        for user in self._users_mem:
+            if user["email"] == email_n:
+                user["devops_org"] = organization.strip()
+                user["devops_pat_encrypted"] = encrypted_pat
+                user["devops_updated_at"] = now
+                return user
+        return None
+
+    def get_devops_credentials(self, email: str) -> dict[str, Any] | None:
+        email_n = self._normalize(email)
+        user = self.find_user(email_n)
+        if not user:
+            return None
+        return {
+            "organization": user.get("devops_org"),
+            "encrypted_pat": user.get("devops_pat_encrypted"),
+            "updated_at": user.get("devops_updated_at"),
+        }
