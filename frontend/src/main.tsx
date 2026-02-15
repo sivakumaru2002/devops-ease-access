@@ -2,66 +2,18 @@ import React, { FormEvent, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import './styles.css';
 
-type Step = 'userAuth' | 'homeChoice' | 'devopsLogin' | 'projects' | 'dashboard';
+type Step = 'userAuth' | 'homeChoice' | 'dashboardPortal' | 'devopsLogin' | 'projects' | 'dashboard';
 
-type ConnectResponse = {
-  session_id: string;
-  organization: string;
-  project_count: number;
-};
-
-type AuthResponse = {
-  auth_token: string;
-  email: string;
-  username: string;
-  is_admin: boolean;
-  approved: boolean;
-};
-
-type DashboardItem = {
-  id: string;
-  name: string;
-  description?: string | null;
-  created_by: string;
-  created_at: string;
-};
-
-type PendingUser = {
-  id: string;
-  email: string;
-  username: string;
-};
-
+type ConnectResponse = { session_id: string; organization: string; project_count: number };
+type AuthResponse = { auth_token: string; email: string; username: string; is_admin: boolean; approved: boolean };
+type DevOpsCredentialInfo = { organization?: string | null; has_pat: boolean; updated_at?: string | null };
+type DashboardItem = { id: string; name: string; description?: string | null; created_by: string; created_at: string };
+type PendingUser = { id: string; email: string; username: string };
 type Project = { name: string };
-
-type Pipeline = {
-  id: number;
-  name: string;
-  latest_status: string;
-  latest_result: string;
-};
-
-type PipelineRun = {
-  id: number;
-  state?: string;
-  result?: string;
-  createdDate?: string;
-};
-
-type FailedRun = {
-  run_id: number;
-  failed_task: string;
-  error_message: string;
-  timestamp: string;
-  logs_summary: string;
-};
-
-type ErrorIntelligenceResponse = {
-  status: string;
-  ai_summary: string | null;
-  failed_runs: FailedRun[];
-};
-
+type Pipeline = { id: number; name: string; latest_status: string; latest_result: string };
+type PipelineRun = { id: number; state?: string; result?: string; createdDate?: string };
+type FailedRun = { run_id: number; failed_task: string; error_message: string; timestamp: string; logs_summary: string };
+type ErrorIntelligenceResponse = { status: string; ai_summary: string | null; failed_runs: FailedRun[] };
 type Analytics = {
   success_count?: number;
   failure_count?: number;
@@ -69,7 +21,6 @@ type Analytics = {
   failure_distribution?: Record<string, number>;
   code_push_frequency?: Record<string, number>;
 };
-
 type ResourceItem = {
   id: string;
   organization: string;
@@ -85,7 +36,7 @@ const API = 'http://localhost:8000';
 
 function VerticalBars({ title, data }: { title: string; data: Record<string, number> }) {
   const entries = Object.entries(data);
-  const max = Math.max(...entries.map(([, value]) => value), 1);
+  const max = Math.max(...entries.map(([, v]) => v), 1);
   return (
     <article className="chart-card">
       <h3>{title}</h3>
@@ -104,20 +55,15 @@ function VerticalBars({ title, data }: { title: string; data: Record<string, num
 
 function HorizontalBars({ title, data }: { title: string; data: Record<string, number> }) {
   const entries = Object.entries(data).sort((a, b) => b[1] - a[1]);
-  const max = Math.max(...entries.map(([, value]) => value), 1);
+  const max = Math.max(...entries.map(([, v]) => v), 1);
   return (
     <article className="chart-card">
       <h3>{title}</h3>
       <ul className="hbar-list" aria-label={title}>
         {entries.map(([label, value]) => (
           <li key={label}>
-            <div className="hbar-head">
-              <span>{label}</span>
-              <strong>{value}</strong>
-            </div>
-            <div className="hbar-track">
-              <div className="hbar-fill" style={{ width: `${(value / max) * 100}%` }} />
-            </div>
+            <div className="hbar-head"><span>{label}</span><strong>{value}</strong></div>
+            <div className="hbar-track"><div className="hbar-fill" style={{ width: `${(value / max) * 100}%` }} /></div>
           </li>
         ))}
       </ul>
@@ -129,7 +75,6 @@ function SuccessFailureGraph({ success = 0, failure = 0 }: { success?: number; f
   const total = Math.max(success + failure, 1);
   const successPct = Math.round((success / total) * 100);
   const failPct = 100 - successPct;
-
   return (
     <article className="chart-card">
       <h3>Success vs Failure Rate</h3>
@@ -137,28 +82,23 @@ function SuccessFailureGraph({ success = 0, failure = 0 }: { success?: number; f
         <div className="stack-ok" style={{ width: `${successPct}%` }} />
         <div className="stack-fail" style={{ width: `${failPct}%` }} />
       </div>
-      <p className="muted">
-        Success: {success} ({successPct}%) · Failure: {failure} ({failPct}%)
-      </p>
+      <p className="muted">Success: {success} ({successPct}%) · Failure: {failure} ({failPct}%)</p>
     </article>
   );
 }
 
 function App() {
   const [step, setStep] = useState<Step>('userAuth');
-  const [status, setStatus] = useState('Sign in with dashboard account or register a new user.');
+  const [status, setStatus] = useState('Sign in to dashboard account.');
+  const [isBusy, setIsBusy] = useState(false);
 
   const [authToken, setAuthToken] = useState<string | null>(null);
   const [userEmail, setUserEmail] = useState('');
   const [userName, setUserName] = useState('');
   const [isAdmin, setIsAdmin] = useState(false);
   const [isApproved, setIsApproved] = useState(false);
-
   const [loginEmailOrUser, setLoginEmailOrUser] = useState('admin@gmail.com');
   const [loginPassword, setLoginPassword] = useState('admin');
-  const [registerEmail, setRegisterEmail] = useState('');
-  const [registerUserName, setRegisterUserName] = useState('');
-  const [registerPassword, setRegisterPassword] = useState('');
 
   const [dashboards, setDashboards] = useState<DashboardItem[]>([]);
   const [pendingUsers, setPendingUsers] = useState<PendingUser[]>([]);
@@ -167,15 +107,17 @@ function App() {
 
   const [organization, setOrganization] = useState('');
   const [pat, setPat] = useState('');
+  const [patConfigured, setPatConfigured] = useState(false);
+  const [credUpdatedAt, setCredUpdatedAt] = useState<string | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
 
   const [projects, setProjects] = useState<Project[]>([]);
   const [projectSearch, setProjectSearch] = useState('');
   const [selectedProject, setSelectedProject] = useState<string | null>(null);
-
   const [pipelines, setPipelines] = useState<Pipeline[]>([]);
   const [analytics, setAnalytics] = useState<Analytics | null>(null);
   const [pipelineRuns, setPipelineRuns] = useState<Record<number, PipelineRun[]>>({});
+  const [loadingRunsByPipeline, setLoadingRunsByPipeline] = useState<Record<number, boolean>>({});
 
   const [resources, setResources] = useState<ResourceItem[]>([]);
   const [resourceEnvironment, setResourceEnvironment] = useState('');
@@ -183,9 +125,6 @@ function App() {
   const [resourceUrl, setResourceUrl] = useState('');
   const [resourceType, setResourceType] = useState('');
   const [resourceNotes, setResourceNotes] = useState('');
-
-  const [isBusy, setIsBusy] = useState(false);
-  const [loadingRunsByPipeline, setLoadingRunsByPipeline] = useState<Record<number, boolean>>({});
 
   const [modalOpen, setModalOpen] = useState(false);
   const [modalTitle, setModalTitle] = useState('Failure Explanation');
@@ -207,6 +146,28 @@ function App() {
     return grouped;
   }, [resources]);
 
+  const loadDashboards = async (token = authToken) => {
+    if (!token) return;
+    const response = await fetch(`${API}/api/dashboards?auth_token=${token}`);
+    if (response.ok) setDashboards((await response.json()) as DashboardItem[]);
+  };
+
+  const loadPendingUsers = async (token = authToken) => {
+    if (!token) return;
+    const response = await fetch(`${API}/api/admin/pending-users?auth_token=${token}`);
+    if (response.ok) setPendingUsers((await response.json()) as PendingUser[]);
+  };
+
+  const loadDevopsCredentials = async (token = authToken) => {
+    if (!token) return;
+    const response = await fetch(`${API}/api/devops/credentials?auth_token=${token}`);
+    if (!response.ok) return;
+    const payload = (await response.json()) as DevOpsCredentialInfo;
+    setOrganization(payload.organization ?? '');
+    setPatConfigured(payload.has_pat);
+    setCredUpdatedAt(payload.updated_at ?? null);
+  };
+
   const loginDashboardUser = async (event: FormEvent) => {
     event.preventDefault();
     setIsBusy(true);
@@ -226,54 +187,18 @@ function App() {
       setUserName(payload.username);
       setIsAdmin(payload.is_admin);
       setIsApproved(payload.approved);
-
       if (!payload.approved) {
         setStatus('Your account is waiting for admin approval.');
         return;
       }
-
-      setStatus(`Welcome ${payload.username}. Choose Dashboard or DevOps.`);
       await loadDashboards(payload.auth_token);
-      if (payload.is_admin) {
-        await loadPendingUsers(payload.auth_token);
-      }
+      if (payload.is_admin) await loadPendingUsers(payload.auth_token);
+      setStatus(`Welcome ${payload.username}. Choose Dashboard or DevOps.`);
       setStep('homeChoice');
     } catch {
       setStatus('Network error during login.');
     } finally {
       setIsBusy(false);
-    }
-  };
-
-  const registerDashboardUser = async (event: FormEvent) => {
-    event.preventDefault();
-    setIsBusy(true);
-    try {
-      const response = await fetch(`${API}/api/auth/register`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: registerEmail, username: registerUserName, password: registerPassword }),
-      });
-      if (!response.ok) {
-        setStatus('Registration failed. User/email may already exist.');
-        return;
-      }
-      setRegisterEmail('');
-      setRegisterUserName('');
-      setRegisterPassword('');
-      setStatus('Registration submitted. Wait for admin approval, then login.');
-    } catch {
-      setStatus('Network error during registration.');
-    } finally {
-      setIsBusy(false);
-    }
-  };
-
-  const loadDashboards = async (token = authToken) => {
-    if (!token) return;
-    const response = await fetch(`${API}/api/dashboards?auth_token=${token}`);
-    if (response.ok) {
-      setDashboards((await response.json()) as DashboardItem[]);
     }
   };
 
@@ -287,24 +212,16 @@ function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: dashboardName, description: dashboardDescription }),
       });
-      if (response.ok) {
-        setDashboardName('');
-        setDashboardDescription('');
-        setStatus('Dashboard created.');
-        await loadDashboards();
-      } else {
+      if (!response.ok) {
         setStatus('Only admin can create dashboards.');
+        return;
       }
+      setDashboardName('');
+      setDashboardDescription('');
+      await loadDashboards();
+      setStatus('Dashboard created.');
     } finally {
       setIsBusy(false);
-    }
-  };
-
-  const loadPendingUsers = async (token = authToken) => {
-    if (!token) return;
-    const response = await fetch(`${API}/api/admin/pending-users?auth_token=${token}`);
-    if (response.ok) {
-      setPendingUsers((await response.json()) as PendingUser[]);
     }
   };
 
@@ -320,31 +237,46 @@ function App() {
     }
   };
 
-  const connectDevops = async (event: FormEvent) => {
+  const saveDevopsCredentials = async (event: FormEvent) => {
     event.preventDefault();
     if (!authToken) return;
     setIsBusy(true);
-    setStatus('Connecting to Azure DevOps...');
     try {
-      const response = await fetch(`${API}/api/connect?auth_token=${authToken}`, {
+      const response = await fetch(`${API}/api/devops/credentials?auth_token=${authToken}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ organization, pat }),
       });
       if (!response.ok) {
-        setStatus('DevOps login failed. Verify org/PAT and user approval.');
+        setStatus('Failed to save org/PAT. Please verify values.');
+        return;
+      }
+      const payload = (await response.json()) as DevOpsCredentialInfo;
+      setPat('');
+      setPatConfigured(payload.has_pat);
+      setCredUpdatedAt(payload.updated_at ?? null);
+      setStatus('DevOps org/PAT saved. You can update PAT anytime when expired.');
+    } finally {
+      setIsBusy(false);
+    }
+  };
+
+  const connectDevops = async () => {
+    if (!authToken) return;
+    setIsBusy(true);
+    setStatus('Connecting to Azure DevOps...');
+    try {
+      const response = await fetch(`${API}/api/devops/connect?auth_token=${authToken}`, { method: 'POST' });
+      if (!response.ok) {
+        setStatus('DevOps connect failed. Save/update PAT then retry.');
         return;
       }
       const payload = (await response.json()) as ConnectResponse;
       setSessionId(payload.session_id);
-      setStatus(`DevOps connected. ${payload.project_count} projects found.`);
-
       const projectsResponse = await fetch(`${API}/api/projects?session_id=${payload.session_id}`);
-      const projectsPayload = (await projectsResponse.json()) as Project[];
-      setProjects(projectsPayload);
+      setProjects((await projectsResponse.json()) as Project[]);
+      setStatus(`DevOps connected. ${payload.project_count} projects found.`);
       setStep('projects');
-    } catch {
-      setStatus('Network error while connecting DevOps.');
     } finally {
       setIsBusy(false);
     }
@@ -354,17 +286,13 @@ function App() {
     if (!sessionId) return;
     setSelectedProject(projectName);
     setIsBusy(true);
-    setStatus(`Loading dashboard for ${projectName}...`);
     try {
-      const [pipelinesResponse, analyticsResponse] = await Promise.all([
+      const [pResp, aResp] = await Promise.all([
         fetch(`${API}/api/projects/${encodeURIComponent(projectName)}/pipelines?session_id=${sessionId}`),
         fetch(`${API}/api/projects/${encodeURIComponent(projectName)}/analytics?session_id=${sessionId}`),
       ]);
-
-      const pipelinesPayload = (await pipelinesResponse.json()) as Pipeline[];
-      const analyticsPayload = (await analyticsResponse.json()) as Analytics;
-      setPipelines(pipelinesPayload);
-      setAnalytics(analyticsPayload);
+      setPipelines((await pResp.json()) as Pipeline[]);
+      setAnalytics((await aResp.json()) as Analytics);
       setPipelineRuns({});
       await loadResources(projectName);
       setStep('dashboard');
@@ -376,11 +304,10 @@ function App() {
 
   const loadResources = async (projectName?: string) => {
     if (!sessionId) return;
-    const projectParam = encodeURIComponent(projectName ?? selectedProject ?? '');
-    const response = await fetch(`${API}/api/resources?session_id=${sessionId}&project=${projectParam}`);
-    if (response.ok) {
-      setResources((await response.json()) as ResourceItem[]);
-    }
+    const response = await fetch(
+      `${API}/api/resources?session_id=${sessionId}&project=${encodeURIComponent(projectName ?? selectedProject ?? '')}`,
+    );
+    if (response.ok) setResources((await response.json()) as ResourceItem[]);
   };
 
   const createResource = async (event: FormEvent) => {
@@ -433,7 +360,6 @@ function App() {
     setModalErrorText('Loading error details...');
     setModalExplanationText('Loading explanation...');
     setModalOpen(true);
-
     try {
       const response = await fetch(
         `${API}/api/projects/${encodeURIComponent(selectedProject)}/pipelines/${pipeline.id}/error-intelligence?session_id=${sessionId}&run_id=${run.id}`,
@@ -445,9 +371,7 @@ function App() {
         setModalExplanationText('No explanation available.');
         return;
       }
-      setModalErrorText(
-        `Failed task: ${matched.failed_task}\nError: ${matched.error_message}\nTimestamp: ${matched.timestamp}\nSummary: ${matched.logs_summary}`,
-      );
+      setModalErrorText(`Failed task: ${matched.failed_task}\nError: ${matched.error_message}\nTimestamp: ${matched.timestamp}`);
       setModalExplanationText(insight.ai_summary ?? 'AI explanation not configured.');
     } catch {
       setModalErrorText('Unable to load error details right now.');
@@ -459,13 +383,12 @@ function App() {
     <>
       <header className="hero">
         <h1>DevOps Ease Access</h1>
-        <p>Secure dashboard login, admin approval, then choose Dashboard or DevOps.</p>
+        <p>Dashboard login first. Then choose Dashboard or DevOps.</p>
       </header>
-
       <p className="status" aria-live="polite">{status}</p>
 
       {step === 'userAuth' ? (
-        <main className="single-page two-col">
+        <main className="single-page">
           <section className="card login-card">
             <h2>Dashboard Login</h2>
             <form onSubmit={loginDashboardUser}>
@@ -475,40 +398,38 @@ function App() {
               <input type="password" value={loginPassword} onChange={(e) => setLoginPassword(e.target.value)} required />
               <button type="submit" disabled={isBusy}>{isBusy ? 'Please wait...' : 'Login'}</button>
             </form>
-            <p className="muted">Default admin: admin@gmail.com / admin</p>
-          </section>
-
-          <section className="card login-card">
-            <h2>Register User</h2>
-            <form onSubmit={registerDashboardUser}>
-              <label>Email</label>
-              <input value={registerEmail} onChange={(e) => setRegisterEmail(e.target.value)} required />
-              <label>Username</label>
-              <input value={registerUserName} onChange={(e) => setRegisterUserName(e.target.value)} required />
-              <label>Password</label>
-              <input type="password" value={registerPassword} onChange={(e) => setRegisterPassword(e.target.value)} required />
-              <button type="submit" disabled={isBusy}>{isBusy ? 'Submitting...' : 'Register'}</button>
-            </form>
+            <p className="muted">Ask admin to create/approve your account. Default admin: admin@gmail.com / admin.</p>
           </section>
         </main>
       ) : null}
 
       {step === 'homeChoice' ? (
+        <main className="single-page two-col">
+          <section className="card">
+            <h2>Dashboard Portal</h2>
+            <p>Create dashboard cards (admin) and view them (users).</p>
+            <button onClick={() => setStep('dashboardPortal')}>Open Dashboard Portal</button>
+          </section>
+          <section className="card">
+            <h2>DevOps Page</h2>
+            <p>Configure Org + PAT (saved against your user), then connect.</p>
+            <button onClick={() => { void loadDevopsCredentials(); setStep('devopsLogin'); }}>Open DevOps Page</button>
+          </section>
+        </main>
+      ) : null}
+
+      {step === 'dashboardPortal' ? (
         <main className="single-page">
           <section className="card">
-            <h2>Welcome {userName}</h2>
-            <p>{userEmail} {isAdmin ? '(Admin)' : '(Viewer)'}</p>
             <div className="row-between">
-              <button className="small" onClick={() => setStep('devopsLogin')}>Go to DevOps</button>
-              <button className="small" onClick={() => void loadDashboards()}>Refresh Dashboards</button>
+              <h2>Dashboards</h2>
+              <button className="small" onClick={() => setStep('homeChoice')}>Back</button>
             </div>
-            <h3>Dashboards</h3>
+            <p>{userEmail} {isAdmin ? '(Admin)' : '(Viewer)'}</p>
+            <button className="small" onClick={() => void loadDashboards()} disabled={isBusy}>Refresh Dashboards</button>
             <ul className="resource-list">
-              {dashboards.map((dashboard) => (
-                <li key={dashboard.id} className="resource-item">
-                  <strong>{dashboard.name}</strong>
-                  <p className="muted">{dashboard.description ?? 'No description'}</p>
-                </li>
+              {dashboards.map((d) => (
+                <li key={d.id} className="resource-item"><strong>{d.name}</strong><p className="muted">{d.description ?? 'No description'}</p></li>
               ))}
             </ul>
           </section>
@@ -542,16 +463,20 @@ function App() {
       {step === 'devopsLogin' ? (
         <main className="single-page">
           <section className="card login-card">
-            <h2>DevOps Login</h2>
+            <div className="row-between">
+              <h2>DevOps Page</h2>
+              <button className="small" onClick={() => setStep('homeChoice')}>Back</button>
+            </div>
             {!isApproved ? <p className="muted">Waiting for admin approval.</p> : null}
-            <form onSubmit={connectDevops}>
+            <form onSubmit={saveDevopsCredentials}>
               <label>Organization Name</label>
               <input value={organization} onChange={(e) => setOrganization(e.target.value)} required />
-              <label>PAT</label>
+              <label>PAT {patConfigured ? '(Update if expired)' : ''}</label>
               <input type="password" value={pat} onChange={(e) => setPat(e.target.value)} required />
-              <button type="submit" disabled={isBusy || !isApproved}>{isBusy ? 'Connecting...' : 'Connect DevOps'}</button>
+              <button type="submit" disabled={isBusy || !isApproved}>{isBusy ? 'Saving...' : 'Save / Update PAT'}</button>
             </form>
-            <button className="small" onClick={() => setStep('homeChoice')}>Back</button>
+            <p className="muted">PAT configured: {patConfigured ? 'Yes' : 'No'} {credUpdatedAt ? `· Updated: ${credUpdatedAt}` : ''}</p>
+            <button onClick={() => void connectDevops()} disabled={isBusy || !isApproved || !patConfigured}>Connect to DevOps</button>
           </section>
         </main>
       ) : null}
@@ -560,16 +485,10 @@ function App() {
         <main className="single-page">
           <section className="card projects-card">
             <h2>Select Project</h2>
-            <input
-              placeholder="Search project..."
-              value={projectSearch}
-              onChange={(event) => setProjectSearch(event.target.value)}
-            />
+            <input placeholder="Search project..." value={projectSearch} onChange={(e) => setProjectSearch(e.target.value)} />
             <ul className="project-list">
               {filteredProjects.map((project) => (
-                <li key={project.name}>
-                  <button onClick={() => void openProjectDashboard(project.name)}>{project.name}</button>
-                </li>
+                <li key={project.name}><button onClick={() => void openProjectDashboard(project.name)}>{project.name}</button></li>
               ))}
             </ul>
             <button className="small" onClick={() => setStep('homeChoice')}>Back to choice</button>
@@ -579,18 +498,14 @@ function App() {
 
       {step === 'dashboard' ? (
         <main className="dashboard-page">
-          <section className="card wide" aria-labelledby="charts-title">
-            <h2 id="charts-title">Charts</h2>
+          <section className="card wide">
+            <h2>Charts</h2>
             {analytics ? (
               <div className="chart-grid">
                 <SuccessFailureGraph success={analytics.success_count ?? 0} failure={analytics.failure_count ?? 0} />
                 {analytics.build_trend ? <VerticalBars title="Build Trend" data={analytics.build_trend} /> : null}
-                {analytics.code_push_frequency ? (
-                  <VerticalBars title="PR / Code Push Frequency" data={analytics.code_push_frequency} />
-                ) : null}
-                {analytics.failure_distribution ? (
-                  <HorizontalBars title="Pipeline Failure Distribution" data={analytics.failure_distribution} />
-                ) : null}
+                {analytics.code_push_frequency ? <VerticalBars title="PR / Code Push Frequency" data={analytics.code_push_frequency} /> : null}
+                {analytics.failure_distribution ? <HorizontalBars title="Pipeline Failure Distribution" data={analytics.failure_distribution} /> : null}
               </div>
             ) : <p>No analytics data yet.</p>}
           </section>
@@ -601,16 +516,11 @@ function App() {
               <button className="small" onClick={() => void loadResources(selectedProject ?? undefined)}>Refresh</button>
             </div>
             <form className="resource-form" onSubmit={createResource}>
-              <label>Environment</label>
-              <input value={resourceEnvironment} onChange={(e) => setResourceEnvironment(e.target.value)} required />
-              <label>Resource Name</label>
-              <input value={resourceName} onChange={(e) => setResourceName(e.target.value)} required />
-              <label>Resource URL</label>
-              <input value={resourceUrl} onChange={(e) => setResourceUrl(e.target.value)} required />
-              <label>Resource Type</label>
-              <input value={resourceType} onChange={(e) => setResourceType(e.target.value)} />
-              <label>Notes</label>
-              <input value={resourceNotes} onChange={(e) => setResourceNotes(e.target.value)} />
+              <label>Environment</label><input value={resourceEnvironment} onChange={(e) => setResourceEnvironment(e.target.value)} required />
+              <label>Resource Name</label><input value={resourceName} onChange={(e) => setResourceName(e.target.value)} required />
+              <label>Resource URL</label><input value={resourceUrl} onChange={(e) => setResourceUrl(e.target.value)} required />
+              <label>Resource Type</label><input value={resourceType} onChange={(e) => setResourceType(e.target.value)} />
+              <label>Notes</label><input value={resourceNotes} onChange={(e) => setResourceNotes(e.target.value)} />
               <button type="submit" disabled={isBusy}>Add Resource</button>
             </form>
 
@@ -618,11 +528,11 @@ function App() {
               <article key={env} className="resource-group">
                 <h3>{env}</h3>
                 <ul className="resource-list">
-                  {items.map((resource) => (
-                    <li key={resource.id} className="resource-item">
-                      <p><strong>{resource.name}</strong> {resource.resource_type ? `· ${resource.resource_type}` : ''}</p>
-                      <a href={resource.url} target="_blank" rel="noreferrer">{resource.url}</a>
-                      {resource.notes ? <p className="muted">{resource.notes}</p> : null}
+                  {items.map((r) => (
+                    <li key={r.id} className="resource-item">
+                      <p><strong>{r.name}</strong>{r.resource_type ? ` · ${r.resource_type}` : ''}</p>
+                      <a href={r.url} target="_blank" rel="noreferrer">{r.url}</a>
+                      {r.notes ? <p className="muted">{r.notes}</p> : null}
                     </li>
                   ))}
                 </ul>
@@ -631,30 +541,15 @@ function App() {
           </section>
 
           <section className="card wide">
-            <div className="row-between">
-              <h2>Pipelines • {selectedProject}</h2>
-              <button className="small" onClick={() => setStep('projects')}>Back to Projects</button>
-            </div>
+            <div className="row-between"><h2>Pipelines • {selectedProject}</h2><button className="small" onClick={() => setStep('projects')}>Back to Projects</button></div>
             <div className="pipeline-accordion">
               {pipelines.map((pipeline) => (
-                <details
-                  key={pipeline.id}
-                  className="pipeline-item"
-                  onToggle={(event) => {
-                    const el = event.currentTarget as HTMLDetailsElement;
-                    if (el.open) void loadRunsForPipeline(pipeline.id);
-                  }}
-                >
-                  <summary>
-                    <span>{pipeline.name}</span>
-                    <span className="muted">{pipeline.latest_status} · {pipeline.latest_result}</span>
-                  </summary>
+                <details key={pipeline.id} className="pipeline-item" onToggle={(e) => { const el = e.currentTarget as HTMLDetailsElement; if (el.open) void loadRunsForPipeline(pipeline.id); }}>
+                  <summary><span>{pipeline.name}</span><span className="muted">{pipeline.latest_status} · {pipeline.latest_result}</span></summary>
                   {loadingRunsByPipeline[pipeline.id] ? <p className="loader">Loading run history...</p> : (
                     <div className="table-wrap">
                       <table>
-                        <thead>
-                          <tr><th>Run ID</th><th>State</th><th>Result</th><th>Created</th><th>Error</th></tr>
-                        </thead>
+                        <thead><tr><th>Run ID</th><th>State</th><th>Result</th><th>Created</th><th>Error</th></tr></thead>
                         <tbody>
                           {(pipelineRuns[pipeline.id] ?? []).map((run) => (
                             <tr key={run.id}>

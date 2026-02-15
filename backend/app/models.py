@@ -97,3 +97,14 @@ class PendingUserItem(BaseModel):
     approved: bool
     is_admin: bool
     created_at: datetime
+
+
+class DevOpsCredentialRequest(BaseModel):
+    organization: str = Field(..., min_length=2)
+    pat: str = Field(..., min_length=5)
+
+
+class DevOpsCredentialInfo(BaseModel):
+    organization: str | None = None
+    has_pat: bool = False
+    updated_at: datetime | None = None

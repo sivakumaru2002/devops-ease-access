@@ -13,6 +13,8 @@ from .models import (
     AuthResponse,
     ConnectRequest,
     ConnectResponse,
+    DevOpsCredentialInfo,
+    DevOpsCredentialRequest,
     DashboardCreateRequest,
     DashboardItem,
     LoginRequest,
@@ -180,6 +182,66 @@ async def create_dashboard(payload: DashboardCreateRequest, auth_token: str) -> 
     admin = _require_admin(auth_token)
     created = user_store.create_dashboard(payload.name, payload.description, created_by=admin["email"])
     return DashboardItem(**created)
+
+
+@app.get("/api/devops/credentials", response_model=DevOpsCredentialInfo)
+async def get_devops_credentials(auth_token: str) -> DevOpsCredentialInfo:
+    user = _require_approved_user(auth_token)
+    creds = user_store.get_devops_credentials(user["email"])
+    if not creds:
+        return DevOpsCredentialInfo()
+    return DevOpsCredentialInfo(
+        organization=creds.get("organization"),
+        has_pat=bool(creds.get("encrypted_pat")),
+        updated_at=creds.get("updated_at"),
+    )
+
+
+@app.post("/api/devops/credentials", response_model=DevOpsCredentialInfo)
+async def set_devops_credentials(payload: DevOpsCredentialRequest, auth_token: str) -> DevOpsCredentialInfo:
+    user = _require_approved_user(auth_token)
+
+    # Validate credentials before saving.
+    client = AzureDevOpsClient(payload.organization, payload.pat)
+    try:
+        await client.list_projects()
+    except Exception as ex:
+        raise HTTPException(status_code=401, detail=f"Authentication/connectivity failed: {ex}") from ex
+
+    updated = user_store.set_devops_credentials(user["email"], payload.organization, encrypt_secret(payload.pat))
+    if not updated:
+        raise HTTPException(404, "User not found")
+
+    return DevOpsCredentialInfo(
+        organization=updated.get("devops_org"),
+        has_pat=bool(updated.get("devops_pat_encrypted")),
+        updated_at=updated.get("devops_updated_at"),
+    )
+
+
+@app.post("/api/devops/connect", response_model=ConnectResponse)
+async def connect_devops(auth_token: str) -> ConnectResponse:
+    user = _require_approved_user(auth_token)
+    creds = user_store.get_devops_credentials(user["email"])
+    if not creds or not creds.get("organization") or not creds.get("encrypted_pat"):
+        raise HTTPException(400, "DevOps credentials not configured. Please save org and PAT first.")
+
+    organization = creds["organization"]
+    decrypted_pat = decrypt_secret(creds["encrypted_pat"])
+
+    client = AzureDevOpsClient(organization, decrypted_pat)
+    try:
+        projects = await client.list_projects()
+    except Exception as ex:
+        raise HTTPException(status_code=401, detail=f"Authentication/connectivity failed: {ex}") from ex
+
+    session_id = str(uuid4())
+    session_store[session_id] = {
+        "organization": organization,
+        "encrypted_pat": creds["encrypted_pat"],
+        "expires_at": datetime.utcnow() + timedelta(minutes=settings.session_ttl_minutes),
+    }
+    return ConnectResponse(session_id=session_id, organization=organization, project_count=len(projects))
 
 
 @app.post("/api/connect", response_model=ConnectResponse)
