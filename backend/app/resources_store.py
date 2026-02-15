@@ -24,17 +24,14 @@ class ResourceStore:
             self._collection.create_index(
                 [("organization", 1), ("project", 1), ("environment", 1), ("name", 1)]
             )
+            self._collection.create_index(
+                [("owner_email", 1), ("dashboard_id", 1), ("project", 1), ("environment", 1), ("name", 1)]
+            )
         except PyMongoError:
             self._collection = None
 
-    def is_mongo_enabled(self) -> bool:
-        return self._collection is not None
-
     def add_resource(self, resource: dict[str, Any]) -> dict[str, Any]:
-        payload = {
-            **resource,
-            "created_at": datetime.utcnow(),
-        }
+        payload = {**resource, "created_at": datetime.utcnow()}
 
         if self._collection is not None:
             result = self._collection.insert_one(payload)
@@ -47,24 +44,28 @@ class ResourceStore:
 
     def list_resources(
         self,
-        organization: str,
+        organization: str | None = None,
         project: str | None = None,
         environment: str | None = None,
+        owner_email: str | None = None,
+        dashboard_id: str | None = None,
     ) -> list[dict[str, Any]]:
-        if self._collection is not None:
-            query: dict[str, Any] = {"organization": organization}
-            if project:
-                query["project"] = project
-            if environment:
-                query["environment"] = environment
+        query: dict[str, Any] = {}
+        if organization:
+            query["organization"] = organization
+        if owner_email:
+            query["owner_email"] = owner_email
+        if dashboard_id:
+            query["dashboard_id"] = dashboard_id
+        if project:
+            query["project"] = project
+        if environment:
+            query["environment"] = environment
 
+        if self._collection is not None:
             rows = list(
                 self._collection.find(query).sort(
-                    [
-                        ("project", 1),
-                        ("environment", 1),
-                        ("name", 1),
-                    ]
+                    [("project", 1), ("environment", 1), ("name", 1)]
                 )
             )
             resources: list[dict[str, Any]] = []
@@ -73,11 +74,9 @@ class ResourceStore:
                 resources.append(row)
             return resources
 
-        rows = [r for r in self._memory_resources if r.get("organization") == organization]
-        if project:
-            rows = [r for r in rows if r.get("project") == project]
-        if environment:
-            rows = [r for r in rows if r.get("environment") == environment]
+        rows = self._memory_resources
+        for key, value in query.items():
+            rows = [r for r in rows if r.get(key) == value]
 
         rows.sort(key=lambda x: (x.get("project", ""), x.get("environment", ""), x.get("name", "")))
         return rows
