@@ -108,3 +108,25 @@ class DevOpsCredentialInfo(BaseModel):
     organization: str | None = None
     has_pat: bool = False
     updated_at: datetime | None = None
+
+
+class DashboardResourceCreateRequest(BaseModel):
+    project: str = Field(..., min_length=1)
+    environment: str = Field(..., min_length=1)
+    name: str = Field(..., min_length=1)
+    url: str = Field(..., min_length=4)
+    resource_type: str | None = None
+    notes: str | None = None
+
+
+class DashboardResourceItem(BaseModel):
+    id: str
+    dashboard_id: str
+    owner_email: str
+    project: str
+    environment: str
+    name: str
+    url: str
+    resource_type: str | None = None
+    notes: str | None = None
+    created_at: datetime

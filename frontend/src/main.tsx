@@ -8,6 +8,17 @@ type ConnectResponse = { session_id: string; organization: string; project_count
 type AuthResponse = { auth_token: string; email: string; username: string; is_admin: boolean; approved: boolean };
 type DevOpsCredentialInfo = { organization?: string | null; has_pat: boolean; updated_at?: string | null };
 type DashboardItem = { id: string; name: string; description?: string | null; created_by: string; created_at: string };
+type DashboardResourceItem = {
+  id: string;
+  dashboard_id: string;
+  owner_email: string;
+  project: string;
+  environment: string;
+  name: string;
+  url: string;
+  resource_type?: string | null;
+  notes?: string | null;
+};
 type PendingUser = { id: string; email: string; username: string };
 type Project = { name: string };
 type Pipeline = { id: number; name: string; latest_status: string; latest_result: string };
@@ -104,6 +115,14 @@ function App() {
   const [pendingUsers, setPendingUsers] = useState<PendingUser[]>([]);
   const [dashboardName, setDashboardName] = useState('');
   const [dashboardDescription, setDashboardDescription] = useState('');
+  const [selectedDashboardId, setSelectedDashboardId] = useState('');
+  const [dashboardResources, setDashboardResources] = useState<DashboardResourceItem[]>([]);
+  const [portalProject, setPortalProject] = useState('');
+  const [portalEnvironment, setPortalEnvironment] = useState('');
+  const [portalResourceName, setPortalResourceName] = useState('');
+  const [portalResourceUrl, setPortalResourceUrl] = useState('');
+  const [portalResourceType, setPortalResourceType] = useState('');
+  const [portalResourceNotes, setPortalResourceNotes] = useState('');
 
   const [organization, setOrganization] = useState('');
   const [pat, setPat] = useState('');
@@ -149,13 +168,59 @@ function App() {
   const loadDashboards = async (token = authToken) => {
     if (!token) return;
     const response = await fetch(`${API}/api/dashboards?auth_token=${token}`);
-    if (response.ok) setDashboards((await response.json()) as DashboardItem[]);
+    if (!response.ok) return;
+    const items = (await response.json()) as DashboardItem[];
+    setDashboards(items);
+    if (!selectedDashboardId && items.length > 0) {
+      setSelectedDashboardId(items[0].id);
+      await loadDashboardResources(items[0].id, token);
+    }
   };
 
   const loadPendingUsers = async (token = authToken) => {
     if (!token) return;
     const response = await fetch(`${API}/api/admin/pending-users?auth_token=${token}`);
     if (response.ok) setPendingUsers((await response.json()) as PendingUser[]);
+  };
+
+  const loadDashboardResources = async (dashboardId = selectedDashboardId, token = authToken) => {
+    if (!token || !dashboardId) return;
+    const response = await fetch(`${API}/api/dashboards/${dashboardId}/resources?auth_token=${token}`);
+    if (response.ok) setDashboardResources((await response.json()) as DashboardResourceItem[]);
+  };
+
+  const createDashboardResource = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!authToken || !selectedDashboardId) return;
+    setIsBusy(true);
+    try {
+      const response = await fetch(`${API}/api/dashboards/${selectedDashboardId}/resources?auth_token=${authToken}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          project: portalProject,
+          environment: portalEnvironment,
+          name: portalResourceName,
+          url: portalResourceUrl,
+          resource_type: portalResourceType || undefined,
+          notes: portalResourceNotes || undefined,
+        }),
+      });
+      if (!response.ok) {
+        setStatus('Failed to add dashboard resource card.');
+        return;
+      }
+      setPortalProject('');
+      setPortalEnvironment('');
+      setPortalResourceName('');
+      setPortalResourceUrl('');
+      setPortalResourceType('');
+      setPortalResourceNotes('');
+      await loadDashboardResources(selectedDashboardId);
+      setStatus('Resource card added to dashboard.');
+    } finally {
+      setIsBusy(false);
+    }
   };
 
   const loadDevopsCredentials = async (token = authToken) => {
@@ -430,6 +495,45 @@ function App() {
             <ul className="resource-list">
               {dashboards.map((d) => (
                 <li key={d.id} className="resource-item"><strong>{d.name}</strong><p className="muted">{d.description ?? 'No description'}</p></li>
+              ))}
+            </ul>
+          </section>
+
+          <section className="card">
+            <h3>Add Resource Card (Manual)</h3>
+            <label>Select Dashboard</label>
+            <select
+              value={selectedDashboardId}
+              onChange={(e) => {
+                setSelectedDashboardId(e.target.value);
+                void loadDashboardResources(e.target.value);
+              }}
+            >
+              <option value="">Select dashboard</option>
+              {dashboards.map((d) => (
+                <option key={d.id} value={d.id}>{d.name}</option>
+              ))}
+            </select>
+
+            <form className="resource-form" onSubmit={createDashboardResource}>
+              <label>Project</label><input value={portalProject} onChange={(e) => setPortalProject(e.target.value)} required />
+              <label>Environment</label><input value={portalEnvironment} onChange={(e) => setPortalEnvironment(e.target.value)} required />
+              <label>Resource Name</label><input value={portalResourceName} onChange={(e) => setPortalResourceName(e.target.value)} required />
+              <label>Resource URL</label><input value={portalResourceUrl} onChange={(e) => setPortalResourceUrl(e.target.value)} required />
+              <label>Resource Type</label><input value={portalResourceType} onChange={(e) => setPortalResourceType(e.target.value)} />
+              <label>Notes</label><input value={portalResourceNotes} onChange={(e) => setPortalResourceNotes(e.target.value)} />
+              <button type="submit" disabled={isBusy || !selectedDashboardId}>Add Card</button>
+            </form>
+
+            <button className="small" onClick={() => void loadDashboardResources()} disabled={isBusy || !selectedDashboardId}>Refresh Resource Cards</button>
+            <ul className="resource-list">
+              {dashboardResources.map((r) => (
+                <li key={r.id} className="resource-item">
+                  <p><strong>{r.project}</strong> · {r.environment}</p>
+                  <p><strong>{r.name}</strong>{r.resource_type ? ` · ${r.resource_type}` : ''}</p>
+                  <a href={r.url} target="_blank" rel="noreferrer">{r.url}</a>
+                  {r.notes ? <p className="muted">{r.notes}</p> : null}
+                </li>
               ))}
             </ul>
           </section>

@@ -17,6 +17,8 @@ from .models import (
     DevOpsCredentialRequest,
     DashboardCreateRequest,
     DashboardItem,
+    DashboardResourceCreateRequest,
+    DashboardResourceItem,
     LoginRequest,
     PendingUserItem,
     RegisterRequest,
@@ -182,6 +184,46 @@ async def create_dashboard(payload: DashboardCreateRequest, auth_token: str) -> 
     admin = _require_admin(auth_token)
     created = user_store.create_dashboard(payload.name, payload.description, created_by=admin["email"])
     return DashboardItem(**created)
+
+
+@app.get("/api/dashboards/{dashboard_id}/resources", response_model=list[DashboardResourceItem])
+async def list_dashboard_resources(
+    dashboard_id: str,
+    auth_token: str,
+    project: str | None = None,
+    environment: str | None = None,
+) -> list[DashboardResourceItem]:
+    user = _require_approved_user(auth_token)
+    rows = resource_store.list_resources(
+        owner_email=user["email"],
+        dashboard_id=dashboard_id,
+        project=project,
+        environment=environment,
+    )
+    return [DashboardResourceItem(**row) for row in rows]
+
+
+@app.post("/api/dashboards/{dashboard_id}/resources", response_model=DashboardResourceItem)
+async def create_dashboard_resource(
+    dashboard_id: str,
+    payload: DashboardResourceCreateRequest,
+    auth_token: str,
+) -> DashboardResourceItem:
+    user = _require_approved_user(auth_token)
+
+    created = resource_store.add_resource(
+        {
+            "dashboard_id": dashboard_id,
+            "owner_email": user["email"],
+            "project": payload.project.strip(),
+            "environment": payload.environment.strip(),
+            "name": payload.name.strip(),
+            "url": payload.url.strip(),
+            "resource_type": payload.resource_type.strip() if payload.resource_type else None,
+            "notes": payload.notes.strip() if payload.notes else None,
+        }
+    )
+    return DashboardResourceItem(**created)
 
 
 @app.get("/api/devops/credentials", response_model=DevOpsCredentialInfo)
