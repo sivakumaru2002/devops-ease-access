@@ -19,6 +19,7 @@ from .models import (
     DashboardItem,
     DashboardResourceCreateRequest,
     DashboardResourceItem,
+    DashboardResourceUpdateRequest,
     LoginRequest,
     PendingUserItem,
     RegisterRequest,
@@ -194,8 +195,9 @@ async def list_dashboard_resources(
     environment: str | None = None,
 ) -> list[DashboardResourceItem]:
     user = _require_approved_user(auth_token)
+    owner_email = None if user.get("is_admin") else user["email"]
     rows = resource_store.list_resources(
-        owner_email=user["email"],
+        owner_email=owner_email,
         dashboard_id=dashboard_id,
         project=project,
         environment=environment,
@@ -224,6 +226,40 @@ async def create_dashboard_resource(
         }
     )
     return DashboardResourceItem(**created)
+
+
+@app.put("/api/dashboards/{dashboard_id}/resources/{resource_id}", response_model=DashboardResourceItem)
+async def update_dashboard_resource(
+    dashboard_id: str,
+    resource_id: str,
+    payload: DashboardResourceUpdateRequest,
+    auth_token: str,
+) -> DashboardResourceItem:
+    user = _require_approved_user(auth_token)
+    existing = resource_store.get_resource(resource_id)
+    if not existing or existing.get("dashboard_id") != dashboard_id:
+        raise HTTPException(404, "Resource card not found")
+
+    is_admin = bool(user.get("is_admin"))
+    is_owner = existing.get("owner_email") == user.get("email")
+    if not is_admin and not is_owner:
+        raise HTTPException(403, "Only owner or admin can edit this resource card")
+
+    updated = resource_store.update_resource(
+        resource_id,
+        {
+            "project": payload.project.strip(),
+            "environment": payload.environment.strip(),
+            "name": payload.name.strip(),
+            "url": payload.url.strip(),
+            "resource_type": payload.resource_type.strip() if payload.resource_type else None,
+            "notes": payload.notes.strip() if payload.notes else None,
+        },
+    )
+    if not updated:
+        raise HTTPException(404, "Resource card not found")
+
+    return DashboardResourceItem(**updated)
 
 
 @app.get("/api/devops/credentials", response_model=DevOpsCredentialInfo)

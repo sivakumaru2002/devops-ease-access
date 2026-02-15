@@ -80,3 +80,44 @@ class ResourceStore:
 
         rows.sort(key=lambda x: (x.get("project", ""), x.get("environment", ""), x.get("name", "")))
         return rows
+
+
+    def get_resource(self, resource_id: str) -> dict[str, Any] | None:
+        if self._collection is not None:
+            from bson import ObjectId
+
+            try:
+                oid = ObjectId(resource_id)
+            except Exception:
+                return None
+            row = self._collection.find_one({"_id": oid})
+            if not row:
+                return None
+            row["id"] = str(row.pop("_id"))
+            return row
+
+        for row in self._memory_resources:
+            if row.get("id") == resource_id:
+                return row
+        return None
+
+    def update_resource(self, resource_id: str, payload: dict[str, Any]) -> dict[str, Any] | None:
+        if self._collection is not None:
+            from bson import ObjectId
+
+            try:
+                oid = ObjectId(resource_id)
+            except Exception:
+                return None
+            self._collection.update_one({"_id": oid}, {"$set": payload})
+            row = self._collection.find_one({"_id": oid})
+            if not row:
+                return None
+            row["id"] = str(row.pop("_id"))
+            return row
+
+        for row in self._memory_resources:
+            if row.get("id") == resource_id:
+                row.update(payload)
+                return row
+        return None

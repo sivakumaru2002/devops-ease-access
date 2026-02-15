@@ -280,3 +280,16 @@ th, td {
 .two-col {
   grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
 }
+
+.resource-item {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.resource-item .small {
+  justify-self: start;
+}
+
+.resource-form h4 {
+  margin: 0.3rem 0;
+}

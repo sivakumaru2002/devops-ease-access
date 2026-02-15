@@ -130,3 +130,12 @@ class DashboardResourceItem(BaseModel):
     resource_type: str | None = None
     notes: str | None = None
     created_at: datetime
+
+
+class DashboardResourceUpdateRequest(BaseModel):
+    project: str = Field(..., min_length=1)
+    environment: str = Field(..., min_length=1)
+    name: str = Field(..., min_length=1)
+    url: str = Field(..., min_length=4)
+    resource_type: str | None = None
+    notes: str | None = None
