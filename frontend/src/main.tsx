@@ -163,6 +163,17 @@ function App() {
   const [modalTitle, setModalTitle] = useState('Failure Explanation');
   const [modalErrorText, setModalErrorText] = useState('');
   const [modalExplanationText, setModalExplanationText] = useState('');
+  const [expandedResourceIds, setExpandedResourceIds] = useState<Set<string>>(new Set());
+
+  const toggleResourceExpansion = (id: string) => {
+    setExpandedResourceIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
 
   const filteredProjects = useMemo(
     () => projects.filter((p) => p.name.toLowerCase().includes(projectSearch.toLowerCase())),
@@ -670,7 +681,6 @@ function App() {
                 </form>
                 <div style={{ marginTop: '1rem', padding: '1rem', background: 'rgba(99, 142, 255, 0.1)', borderRadius: '8px', border: '1px solid rgba(99, 142, 255, 0.2)' }}>
                   <p className="muted" style={{ margin: 0, fontSize: '0.875rem' }}>
-                    💡 <strong>Default admin:</strong> admin@gmail.com / admin<br />
                     👤 <strong>New user?</strong> Click "Sign Up" to create an account
                   </p>
                 </div>
@@ -740,12 +750,12 @@ function App() {
         <main className="single-page two-col">
           <section className="card">
             <h2>Dashboard Portal</h2>
-            <p>Create dashboard cards (admin) and view them (users).</p>
+            <p style={{ padding: '10px' }}>Dashboard portal which allows user to access azure portal resource at ease.</p>
             <button onClick={() => setStep('dashboardPortal')}>Open Dashboard Portal</button>
           </section>
           <section className="card">
             <h2>DevOps Page</h2>
-            <p>Configure Org + PAT (saved against your user), then connect.</p>
+            <p style={{ padding: '10px' }}>Configure Org + PAT (saved against your user), then connect.</p>
             <button onClick={() => { void loadDevopsCredentials(); setStep('devopsLogin'); }}>Open DevOps Page</button>
           </section>
         </main>
@@ -847,27 +857,75 @@ function App() {
               <button className="small btn-secondary" onClick={() => void loadDashboardResources()} disabled={isBusy || !selectedDashboardId}>🔄 Refresh</button>
             </div>
             {!selectedDashboardId ? <p className="muted">Select a dashboard above to view its resources.</p> : dashboardResources.length === 0 ? <p className="muted" style={{ padding: '2rem', textAlign: 'center', background: 'rgba(15, 20, 32, 0.4)', borderRadius: '8px' }}>📭 No resources added yet for this dashboard.</p> : filteredDashboardResources.length === 0 ? <p className="muted" style={{ padding: '2rem', textAlign: 'center', background: 'rgba(15, 20, 32, 0.4)', borderRadius: '8px' }}>🔍 No resources found matching your {resourceSearchQuery ? 'search' : 'filters'}. {resourceSearchQuery ? `Try a different search term.` : selectedEnvironmentFilter !== 'all' ? `No resources in environment: ${selectedEnvironmentFilter}` : ''}</p> : null}
-            <div className="resource-groups">
-              {Object.entries(groupedDashboardResources).map(([key, items]) => {
-                const [project, environment] = key.split('::');
-                return (
-                  <article key={key} className="resource-group">
-                    <h4>{project} · {environment}</h4>
-                    <ul className="resource-list">
-                      {items.map((r) => (
-                        <li key={r.id} className="resource-item">
-                          <p><strong>{r.name}</strong>{r.resource_type ? ` · ${r.resource_type}` : ''}</p>
-                          <a href={r.url} target="_blank" rel="noreferrer">{r.url}</a>
-                          {r.notes ? <p className="muted">{r.notes}</p> : null}
-                          {isAdmin || r.owner_email === userEmail ? (
-                            <button className="small btn-warning" onClick={() => startEditResource(r)} disabled={isBusy}>✏️ Edit</button>
-                          ) : null}
-                        </li>
-                      ))}
-                    </ul>
-                  </article>
-                );
-              })}
+            <div className="table-wrap" style={{ marginTop: '1.5rem' }}>
+              <table className="resource-table">
+                <thead>
+                  <tr>
+                    <th>Resource Name</th>
+                    <th>Resource Type</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredDashboardResources.map((r) => (
+                    <React.Fragment key={r.id}>
+                      <tr className={expandedResourceIds.has(r.id) ? 'row-expanded' : ''}>
+                        <td>
+                          <div style={{ display: 'flex', flexDirection: 'column' }}>
+                            <strong>{r.name}</strong>
+                          </div>
+                        </td>
+                        <td>
+                          <span className="badge badge-user" style={{ background: 'rgba(99, 142, 255, 0.1)' }}>
+                            {r.resource_type || 'General'}
+                          </span>
+                        </td>
+                        <td>
+                          <div style={{ display: 'flex', gap: '0.5rem' }}>
+                            <button
+                              className="small btn-secondary"
+                              onClick={() => toggleResourceExpansion(r.id)}
+                            >
+                              {expandedResourceIds.has(r.id) ? '🔼 Hide' : '🔽 Details'}
+                            </button>
+                            {isAdmin || r.owner_email === userEmail ? (
+                              <button className="small btn-warning" onClick={() => startEditResource(r)} disabled={isBusy}>✏️ Edit</button>
+                            ) : null}
+                          </div>
+                        </td>
+                      </tr>
+                      {expandedResourceIds.has(r.id) && (
+                        <tr className="details-row">
+                          <td colSpan={3}>
+                            <div className="resource-details-card">
+                              <div className="details-grid-lite">
+                                <div className="detail-item">
+                                  <label>URL</label>
+                                  <a href={r.url} target="_blank" rel="noreferrer" className="detail-link">{r.url}</a>
+                                </div>
+                                <div className="detail-item">
+                                  <label>Project</label>
+                                  <span>{r.project}</span>
+                                </div>
+                                <div className="detail-item">
+                                  <label>Environment</label>
+                                  <span>{r.environment}</span>
+                                </div>
+                              </div>
+                              {r.notes && (
+                                <div className="detail-item" style={{ marginTop: '1rem' }}>
+                                  <label>Notes</label>
+                                  <p className="muted">{r.notes}</p>
+                                </div>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </React.Fragment>
+                  ))}
+                </tbody>
+              </table>
             </div>
 
             {editingResourceId ? (
@@ -964,28 +1022,7 @@ function App() {
             ) : <p>No analytics data yet.</p>}
           </section>
 
-          <section className="card wide">
-            <div className="row-between">
-              <h2>📦 Resource Cards • {selectedProject}</h2>
-              <button className="small btn-secondary" onClick={() => void loadResources(selectedProject ?? undefined)}>🔄 Refresh</button>
-            </div>
-            <p className="muted">Resources managed in Dashboard Portal. View and access your project resources below.</p>
 
-            {Object.entries(resourcesByEnvironment).map(([env, items]) => (
-              <article key={env} className="resource-group">
-                <h3>{env}</h3>
-                <ul className="resource-list">
-                  {items.map((r) => (
-                    <li key={r.id} className="resource-item">
-                      <p><strong>{r.name}</strong>{r.resource_type ? ` · ${r.resource_type}` : ''}</p>
-                      <a href={r.url} target="_blank" rel="noreferrer">{r.url}</a>
-                      {r.notes ? <p className="muted">{r.notes}</p> : null}
-                    </li>
-                  ))}
-                </ul>
-              </article>
-            ))}
-          </section>
 
           <section className="card wide">
             <div className="row-between"><h2>Pipelines • {selectedProject}</h2><button className="small" onClick={() => setStep('projects')}>Back to Projects</button></div>

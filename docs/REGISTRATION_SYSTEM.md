@@ -65,8 +65,6 @@ Password
 [****                                       ]
 
 [🚀 Login]
-
-💡 Default admin: admin@gmail.com / admin
 👤 New user? Click "Sign Up" to create an account
 ```
 
