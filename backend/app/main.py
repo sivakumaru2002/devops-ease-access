@@ -1,14 +1,22 @@
 from collections import Counter
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+import sys
 from uuid import uuid4
+
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    __package__ = "app"
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+import uvicorn
 
 from .ai import summarize_failures
 from .azure_devops import AzureDevOpsClient
 from .cache import TTLCache
 from .config import settings
+from .env_flow_store import EnvFlowStore
 from .models import (
     AuthResponse,
     ConnectRequest,
@@ -25,6 +33,14 @@ from .models import (
     RegisterRequest,
     ResourceCreateRequest,
     ResourceItem,
+    EnvApprovalApplyRequest,
+    EnvApprovalApplyResult,
+    EnvApprovalFlowCreateRequest,
+    EnvApprovalFlowItem,
+    EnvApprovalSnapshotItem,
+    EnvApprovalTemplateItem,
+    EnvApprovalTemplateRequest,
+    EnvApprovalUpdateValuesRequest,
 )
 from .resources_store import ResourceStore
 from .security import decrypt_secret, encrypt_secret
@@ -45,13 +61,21 @@ auth_sessions: dict[str, dict] = {}
 cache = TTLCache(settings.cache_ttl_seconds)
 resource_store = ResourceStore()
 user_store = UserStore()
+env_flow_store = EnvFlowStore()
+
+DASHBOARD_NOT_FOUND = "Dashboard not found"
+ENV_FLOW_NOT_FOUND = "Env approval flow not found"
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 def _get_auth_user(auth_token: str) -> dict:
     auth = auth_sessions.get(auth_token)
     if not auth:
         raise HTTPException(401, "Invalid auth token")
-    if auth["expires_at"] < datetime.utcnow():
+    if auth["expires_at"] < _utcnow():
         auth_sessions.pop(auth_token, None)
         raise HTTPException(401, "Auth session expired")
 
@@ -79,7 +103,7 @@ def _get_session(session_id: str) -> dict:
     session = session_store.get(session_id)
     if not session:
         raise HTTPException(401, "Invalid session")
-    if session["expires_at"] < datetime.utcnow():
+    if session["expires_at"] < _utcnow():
         session_store.pop(session_id, None)
         raise HTTPException(401, "Session expired")
     return session
@@ -117,7 +141,7 @@ async def login_user(payload: LoginRequest) -> AuthResponse:
     auth_token = str(uuid4())
     auth_sessions[auth_token] = {
         "email": user["email"],
-        "expires_at": datetime.utcnow() + timedelta(minutes=settings.session_ttl_minutes),
+        "expires_at": _utcnow() + timedelta(minutes=settings.session_ttl_minutes),
     }
 
     return AuthResponse(
@@ -196,7 +220,7 @@ async def list_dashboard_resources(
 ) -> list[DashboardResourceItem]:
     _require_approved_user(auth_token)
     if not user_store.get_dashboard(dashboard_id):
-        raise HTTPException(404, "Dashboard not found")
+        raise HTTPException(404, DASHBOARD_NOT_FOUND)
     # Dashboard resource cards are shared for all approved users on the same dashboard.
     rows = resource_store.list_resources(
         dashboard_id=dashboard_id,
@@ -214,7 +238,7 @@ async def create_dashboard_resource(
 ) -> DashboardResourceItem:
     user = _require_approved_user(auth_token)
     if not user_store.get_dashboard(dashboard_id):
-        raise HTTPException(404, "Dashboard not found")
+        raise HTTPException(404, DASHBOARD_NOT_FOUND)
 
     created = resource_store.add_resource(
         {
@@ -240,7 +264,7 @@ async def update_dashboard_resource(
 ) -> DashboardResourceItem:
     user = _require_approved_user(auth_token)
     if not user_store.get_dashboard(dashboard_id):
-        raise HTTPException(404, "Dashboard not found")
+        raise HTTPException(404, DASHBOARD_NOT_FOUND)
     existing = resource_store.get_resource(resource_id)
     if not existing or existing.get("dashboard_id") != dashboard_id:
         raise HTTPException(404, "Resource card not found")
@@ -322,7 +346,7 @@ async def connect_devops(auth_token: str) -> ConnectResponse:
     session_store[session_id] = {
         "organization": organization,
         "encrypted_pat": creds["encrypted_pat"],
-        "expires_at": datetime.utcnow() + timedelta(minutes=settings.session_ttl_minutes),
+        "expires_at": _utcnow() + timedelta(minutes=settings.session_ttl_minutes),
     }
     return ConnectResponse(session_id=session_id, organization=organization, project_count=len(projects))
 
@@ -341,7 +365,7 @@ async def connect(payload: ConnectRequest, auth_token: str) -> ConnectResponse:
     session_store[session_id] = {
         "organization": payload.organization,
         "encrypted_pat": encrypt_secret(payload.pat),
-        "expires_at": datetime.utcnow() + timedelta(minutes=settings.session_ttl_minutes),
+        "expires_at": _utcnow() + timedelta(minutes=settings.session_ttl_minutes),
     }
     return ConnectResponse(session_id=session_id, organization=payload.organization, project_count=len(projects))
 
@@ -529,3 +553,114 @@ async def error_intelligence(project: str, pipeline_id: int, session_id: str, ru
         "failed_runs": collected,
         "ai_summary": ai_summary,
     }
+
+
+@app.get("/api/env-approval/templates", response_model=list[EnvApprovalTemplateItem])
+async def list_env_approval_templates(auth_token: str) -> list[EnvApprovalTemplateItem]:
+    _require_approved_user(auth_token)
+    rows = env_flow_store.list_templates()
+    return [EnvApprovalTemplateItem(**row) for row in rows]
+
+
+@app.post("/api/env-approval/templates", response_model=EnvApprovalTemplateItem)
+async def save_env_approval_template(
+    payload: EnvApprovalTemplateRequest,
+    auth_token: str,
+) -> EnvApprovalTemplateItem:
+    user = _require_admin(auth_token)
+    saved = env_flow_store.save_template(
+        {
+            "project": payload.project,
+            "repo": payload.repo,
+            "repo_url": payload.repo_url,
+            "resource_type": payload.resource_type,
+            "environments": [env.model_dump() for env in payload.environments],
+            "saved_by": user["username"],
+        }
+    )
+    return EnvApprovalTemplateItem(**saved)
+
+
+@app.get("/api/env-approval/flows", response_model=list[EnvApprovalFlowItem])
+async def list_env_approval_flows(auth_token: str) -> list[EnvApprovalFlowItem]:
+    _require_approved_user(auth_token)
+    rows = env_flow_store.list_flows()
+    return [EnvApprovalFlowItem(**row) for row in rows]
+
+
+@app.post("/api/env-approval/flows", response_model=EnvApprovalFlowItem)
+async def create_env_approval_flow(
+    payload: EnvApprovalFlowCreateRequest,
+    auth_token: str,
+) -> EnvApprovalFlowItem:
+    user = _require_approved_user(auth_token)
+    created = env_flow_store.create_flow(
+        {
+            **payload.model_dump(),
+            "created_by": user["username"],
+        }
+    )
+    return EnvApprovalFlowItem(**created)
+
+
+@app.get("/api/env-approval/flows/{flow_id}", response_model=EnvApprovalFlowItem)
+async def get_env_approval_flow(flow_id: str, auth_token: str) -> EnvApprovalFlowItem:
+    _require_approved_user(auth_token)
+    row = env_flow_store.get_flow(flow_id)
+    if not row:
+        raise HTTPException(404, ENV_FLOW_NOT_FOUND)
+    return EnvApprovalFlowItem(**row)
+
+
+@app.patch("/api/env-approval/flows/{flow_id}/values", response_model=EnvApprovalFlowItem)
+async def update_env_approval_flow_values(
+    flow_id: str,
+    payload: EnvApprovalUpdateValuesRequest,
+    auth_token: str,
+) -> EnvApprovalFlowItem:
+    user = _require_approved_user(auth_token)
+    try:
+        updated = env_flow_store.update_flow_values(flow_id, payload.key, payload.values, user["username"])
+    except ValueError as ex:
+        raise HTTPException(400, str(ex)) from ex
+    if not updated:
+        raise HTTPException(404, ENV_FLOW_NOT_FOUND)
+    return EnvApprovalFlowItem(**updated)
+
+
+@app.get("/api/env-approval/flows/{flow_id}/snapshots", response_model=list[EnvApprovalSnapshotItem])
+async def list_env_approval_snapshots(flow_id: str, auth_token: str) -> list[EnvApprovalSnapshotItem]:
+    _require_approved_user(auth_token)
+    if not env_flow_store.get_flow(flow_id):
+        raise HTTPException(404, ENV_FLOW_NOT_FOUND)
+    rows = env_flow_store.list_snapshots(flow_id)
+    return [EnvApprovalSnapshotItem(**row) for row in rows]
+
+
+@app.post("/api/env-approval/flows/{flow_id}/rollback/{snapshot_id}", response_model=EnvApprovalFlowItem)
+async def rollback_env_approval_flow(flow_id: str, snapshot_id: str, auth_token: str) -> EnvApprovalFlowItem:
+    user = _require_approved_user(auth_token)
+    row = env_flow_store.rollback_flow(flow_id, snapshot_id, user["username"])
+    if not row:
+        raise HTTPException(404, "Env approval flow or snapshot not found")
+    return EnvApprovalFlowItem(**row)
+
+
+@app.post("/api/env-approval/flows/{flow_id}/apply", response_model=EnvApprovalApplyResult)
+async def apply_env_approval_flow(
+    flow_id: str,
+    payload: EnvApprovalApplyRequest,
+    auth_token: str,
+) -> EnvApprovalApplyResult:
+    user = _require_approved_user(auth_token)
+    try:
+        result = env_flow_store.apply_flow(flow_id, payload.environments, user["username"], payload.approval_reason)
+    except ValueError as ex:
+        raise HTTPException(400, str(ex)) from ex
+    if not result:
+        raise HTTPException(404, ENV_FLOW_NOT_FOUND)
+    return EnvApprovalApplyResult(**result)
+
+
+if __name__ == "__main__":
+    uvicorn.run("app.main:app", host="127.0.0.1", port=8000, reload=False)
