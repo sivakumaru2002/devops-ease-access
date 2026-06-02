@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
+import json
 from typing import Any
 
 from pymongo import MongoClient
@@ -8,6 +9,10 @@ from pymongo.errors import PyMongoError
 
 from .auth import hash_password, verify_password
 from .config import settings
+
+
+VALID_USER_ROLES = {"admin", "devops", "tester"}
+DEFAULT_USER_ROLE = "tester"
 
 
 class UserStore:
@@ -30,26 +35,89 @@ class UserStore:
                 self._users_collection = None
                 self._dashboards_collection = None
 
-        self._ensure_default_admin()
+        self._ensure_bootstrap_users()
 
-    def _ensure_default_admin(self) -> None:
+    def _normalize_role(self, role: str | None, is_admin: bool = False) -> str:
+        normalized = str(role or "").strip().lower()
+        if normalized in VALID_USER_ROLES:
+            return normalized
+        return "admin" if is_admin else DEFAULT_USER_ROLE
+
+    def _serialize_user(self, row: dict[str, Any]) -> dict[str, Any]:
+        payload = dict(row)
+        if "_id" in payload:
+            payload["id"] = str(payload.pop("_id"))
+        payload["approved"] = bool(payload.get("approved"))
+        payload["is_admin"] = bool(payload.get("is_admin"))
+        payload["role"] = self._normalize_role(payload.get("role"), payload["is_admin"])
+        payload["is_admin"] = payload["role"] == "admin" or payload["is_admin"]
+        return payload
+
+    def _utcnow(self) -> datetime:
+        return datetime.now(timezone.utc)
+
+    def _iter_bootstrap_users(self) -> list[tuple[str, str, str, str]]:
+        if not settings.auth_users_json:
+            return []
+
+        try:
+            configured_users = json.loads(settings.auth_users_json)
+        except json.JSONDecodeError:
+            return []
+
+        bootstrap_users: list[tuple[str, str, str, str]] = []
+        for item in configured_users:
+            role = self._normalize_role(item.get("role"))
+            email = str(item.get("email") or item.get("username") or "").strip().lower()
+            username = str(item.get("username") or item.get("email") or "").strip()
+            password = str(item.get("password") or "").strip()
+
+            if email and username and password:
+                bootstrap_users.append((email, username, password, role))
+
+        return bootstrap_users
+
+    def _ensure_bootstrap_users(self) -> None:
+        for email, username, password, role in self._iter_bootstrap_users():
+            if self.find_user(email) or self.find_user(username):
+                continue
+
+            self.create_user(
+                email,
+                username,
+                password,
+                approved=True,
+                is_admin=role == "admin",
+                role=role,
+            )
+
         if self.find_user("admin@gmail.com"):
             return
-        self.create_user("admin@gmail.com", "admin", "admin", approved=True, is_admin=True)
+        self.create_user("admin@gmail.com", "admin", "admin", approved=True, is_admin=True, role="admin")
 
     def _normalize(self, text: str) -> str:
         return text.strip().lower()
 
-    def create_user(self, email: str, username: str, password: str, approved: bool = False, is_admin: bool = False) -> dict[str, Any]:
+    def create_user(
+        self,
+        email: str,
+        username: str,
+        password: str,
+        approved: bool = False,
+        is_admin: bool = False,
+        role: str | None = None,
+    ) -> dict[str, Any]:
         email_n = self._normalize(email)
         username_n = username.strip()
+        role_name = self._normalize_role(role, is_admin)
         payload = {
             "email": email_n,
             "username": username_n,
             "password_hash": hash_password(password),
             "approved": approved,
-            "is_admin": is_admin,
-            "created_at": datetime.utcnow(),
+            "is_admin": role_name == "admin" or is_admin,
+            "role": role_name,
+            "created_at": self._utcnow(),
         }
 
         existing = self.find_user(email_n) or self.find_user(username_n)
@@ -73,12 +141,11 @@ class UserStore:
             row = self._users_collection.find_one({"$or": [{"email": email_n}, {"username": value}]})
             if not row:
                 return None
-            row["id"] = str(row.pop("_id"))
-            return row
+            return self._serialize_user(row)
 
         for user in self._users_mem:
             if user["email"] == email_n or user["username"] == value:
-                return user
+                return self._serialize_user(user)
         return None
 
     def verify_credentials(self, email_or_username: str, password: str) -> dict[str, Any] | None:
@@ -92,14 +159,12 @@ class UserStore:
     def list_pending_users(self) -> list[dict[str, Any]]:
         if self._users_collection is not None:
             rows = list(self._users_collection.find({"approved": False}).sort([("created_at", 1)]))
-            pending = []
-            for row in rows:
-                row["id"] = str(row.pop("_id"))
-                pending.append(row)
-            return pending
-        return [u for u in self._users_mem if not u["approved"]]
+            return [self._serialize_user(row) for row in rows]
+        return [self._serialize_user(u) for u in self._users_mem if not u["approved"]]
 
-    def approve_user(self, user_id: str) -> dict[str, Any] | None:
+    def approve_user(self, user_id: str, role: str | None = None) -> dict[str, Any] | None:
+        role_name = self._normalize_role(role)
+        is_admin = role_name == "admin"
         if self._users_collection is not None:
             from bson import ObjectId
 
@@ -107,17 +172,21 @@ class UserStore:
                 oid = ObjectId(user_id)
             except Exception:
                 return None
-            self._users_collection.update_one({"_id": oid}, {"$set": {"approved": True}})
+            self._users_collection.update_one(
+                {"_id": oid},
+                {"$set": {"approved": True, "role": role_name, "is_admin": is_admin}},
+            )
             row = self._users_collection.find_one({"_id": oid})
             if not row:
                 return None
-            row["id"] = str(row.pop("_id"))
-            return row
+            return self._serialize_user(row)
 
         for user in self._users_mem:
             if user["id"] == user_id:
                 user["approved"] = True
-                return user
+                user["role"] = role_name
+                user["is_admin"] = is_admin
+                return self._serialize_user(user)
         return None
 
     def create_dashboard(self, name: str, description: str | None, created_by: str) -> dict[str, Any]:
@@ -125,7 +194,7 @@ class UserStore:
             "name": name.strip(),
             "description": description.strip() if description else None,
             "created_by": created_by,
-            "created_at": datetime.utcnow(),
+            "created_at": self._utcnow(),
         }
 
         if self._dashboards_collection is not None:
@@ -170,7 +239,7 @@ class UserStore:
 
     def set_devops_credentials(self, email: str, organization: str, encrypted_pat: str) -> dict[str, Any] | None:
         email_n = self._normalize(email)
-        now = datetime.utcnow()
+        now = self._utcnow()
 
         if self._users_collection is not None:
             self._users_collection.update_one(

@@ -1,7 +1,7 @@
 import type { Dispatch, FormEventHandler, SetStateAction } from 'react';
 
 import { ButtonLabel, LoadingMessage } from '../components/Loading';
-import type { DashboardItem, DashboardResourceItem, PendingUser } from '../types';
+import type { DashboardItem, DashboardResourceItem, PendingUser, UserRole } from '../types';
 
 type StringSetter = Dispatch<SetStateAction<string>>;
 
@@ -10,6 +10,7 @@ type DashboardPortalViewProps = Readonly<{
   isAdmin: boolean;
   dashboards: DashboardItem[];
   pendingUsers: PendingUser[];
+  pendingUserRoles: Record<string, UserRole>;
   selectedDashboardId: string;
   dashboardResources: DashboardResourceItem[];
   filteredDashboardResources: DashboardResourceItem[];
@@ -66,7 +67,8 @@ type DashboardPortalViewProps = Readonly<{
   onCancelEditResource: () => void;
   onCreateDashboard: FormEventHandler<HTMLFormElement>;
   onRefreshPendingUsers: () => void;
-  onApproveUser: (userId: string) => void;
+  onPendingUserRoleChange: (userId: string, role: UserRole) => void;
+  onApproveUser: (userId: string, role: UserRole) => void;
 }>;
 
 function DashboardPortalView({
@@ -74,6 +76,7 @@ function DashboardPortalView({
   isAdmin,
   dashboards,
   pendingUsers,
+  pendingUserRoles,
   selectedDashboardId,
   dashboardResources,
   filteredDashboardResources,
@@ -130,6 +133,7 @@ function DashboardPortalView({
   onCancelEditResource,
   onCreateDashboard,
   onRefreshPendingUsers,
+  onPendingUserRoleChange,
   onApproveUser,
 }: DashboardPortalViewProps) {
   return (
@@ -452,9 +456,24 @@ function DashboardPortalView({
                 <p>
                   <strong>{user.username}</strong> · {user.email}
                 </p>
-                <button className="small btn-success" onClick={() => onApproveUser(user.id)} disabled={approvingUserId === user.id}>
+                <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                  <select
+                    value={pendingUserRoles[user.id] ?? user.role}
+                    onChange={(event) => onPendingUserRoleChange(user.id, event.target.value as UserRole)}
+                    disabled={approvingUserId === user.id}
+                  >
+                    <option value="tester">Tester</option>
+                    <option value="devops">DevOps</option>
+                    <option value="admin">Admin</option>
+                  </select>
+                  <button
+                    className="small btn-success"
+                    onClick={() => onApproveUser(user.id, pendingUserRoles[user.id] ?? user.role)}
+                    disabled={approvingUserId === user.id}
+                  >
                   <ButtonLabel loading={approvingUserId === user.id} idle="✅ Approve" busy="Approving..." />
-                </button>
+                  </button>
+                </div>
               </li>
             ))}
           </ul>

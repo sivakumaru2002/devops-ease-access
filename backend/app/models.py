@@ -1,5 +1,9 @@
 from datetime import datetime
+from typing import Literal
 from pydantic import BaseModel, Field
+
+
+UserRole = Literal["admin", "devops", "tester"]
 
 
 class ConnectRequest(BaseModel):
@@ -73,6 +77,7 @@ class AuthResponse(BaseModel):
     auth_token: str
     email: str
     username: str
+    role: UserRole
     is_admin: bool
     approved: bool
 
@@ -94,6 +99,7 @@ class PendingUserItem(BaseModel):
     id: str
     email: str
     username: str
+    role: UserRole
     approved: bool
     is_admin: bool
     created_at: datetime
@@ -172,7 +178,7 @@ class EnvApprovalTemplateRequest(BaseModel):
     repo_url: str | None = None
     resource_type: str = Field(..., min_length=1)
     environments: list[EnvApprovalTemplateEnvironmentRequest] = Field(..., min_length=1)
-    saved_by: str = Field(..., min_length=1)
+    saved_by: str | None = None
 
 
 class EnvApprovalTemplateItem(BaseModel):
@@ -196,7 +202,7 @@ class EnvApprovalFlowCreateRequest(BaseModel):
     subscription_id: str | None = None
     environments: list[EnvApprovalEnvironment] = Field(..., min_length=1)
     tags: EnvApprovalTags
-    created_by: str = Field(..., min_length=1)
+    created_by: str | None = None
 
 
 class EnvApprovalFlowItem(BaseModel):

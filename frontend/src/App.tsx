@@ -39,9 +39,37 @@ import type {
   Pipeline,
   PipelineRun,
   Project,
-  ResourceItem,
   Step,
+  UserRole,
 } from './types';
+
+function resolveUserRole(role: UserRole | null | undefined, isAdmin: boolean): UserRole {
+  if (role) {
+    return role;
+  }
+
+  return isAdmin ? 'admin' : 'tester';
+}
+
+function canManageEnvTemplates(role: UserRole | null): boolean {
+  return role === 'admin' || role === 'devops';
+}
+
+function canManageEnvFlows(role: UserRole | null): boolean {
+  return role === 'admin' || role === 'devops';
+}
+
+function canApplyEnvFlows(role: UserRole | null): boolean {
+  return role === 'admin' || role === 'devops' || role === 'tester';
+}
+
+function buildPendingUserRoles(users: PendingUser[], current: Record<string, UserRole>): Record<string, UserRole> {
+  const next: Record<string, UserRole> = {};
+  for (const user of users) {
+    next[user.id] = current[user.id] ?? user.role;
+  }
+  return next;
+}
 
 function App() {
   const [step, setStep] = useState<Step>('userAuth');
@@ -73,6 +101,7 @@ function App() {
   const [authToken, setAuthToken] = useState<string | null>(null);
   const [userEmail, setUserEmail] = useState('');
   const [userName, setUserName] = useState('');
+  const [userRole, setUserRole] = useState<UserRole | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
   const [isApproved, setIsApproved] = useState(false);
   const [loginEmailOrUser, setLoginEmailOrUser] = useState('admin@gmail.com');
@@ -85,6 +114,7 @@ function App() {
 
   const [dashboards, setDashboards] = useState<DashboardItem[]>([]);
   const [pendingUsers, setPendingUsers] = useState<PendingUser[]>([]);
+  const [pendingUserRoles, setPendingUserRoles] = useState<Record<string, UserRole>>({});
   const [dashboardName, setDashboardName] = useState('');
   const [dashboardDescription, setDashboardDescription] = useState('');
   const [selectedDashboardId, setSelectedDashboardId] = useState('');
@@ -155,6 +185,11 @@ function App() {
     setLoadingState((previous) => ({ ...previous, [key]: value }));
   };
 
+  const effectiveUserRole = resolveUserRole(userRole, isAdmin);
+  const canManageTemplates = canManageEnvTemplates(effectiveUserRole);
+  const canManageFlows = canManageEnvFlows(effectiveUserRole);
+  const canApplyFlows = canApplyEnvFlows(effectiveUserRole);
+
   useEffect(() => {
     const savedState = localStorage.getItem(APP_STATE_STORAGE_KEY);
     if (!savedState) {
@@ -168,6 +203,7 @@ function App() {
       setAuthToken(restored.authToken);
       setUserEmail(restored.userEmail);
       setUserName(restored.userName);
+      setUserRole(resolveUserRole(restored.userRole, restored.isAdmin));
       setIsAdmin(restored.isAdmin);
       setIsApproved(restored.isApproved);
       setSelectedDashboardId(restored.selectedDashboardId);
@@ -191,13 +227,14 @@ function App() {
       authToken,
       userEmail,
       userName,
+      userRole,
       isAdmin,
       isApproved,
       step: safeStep,
       selectedDashboardId,
     };
     localStorage.setItem(APP_STATE_STORAGE_KEY, JSON.stringify(nextState));
-  }, [authToken, userEmail, userName, isAdmin, isApproved, step, selectedDashboardId]);
+  }, [authToken, userEmail, userName, userRole, isAdmin, isApproved, step, selectedDashboardId]);
 
   const toggleResourceExpansion = (id: string) => {
     setExpandedResourceIds((previous) => {
@@ -334,20 +371,51 @@ function App() {
   };
 
   const saveEnvApprovalTemplate = async () => {
-    if (!authToken || !isAdmin) {
+    if (!authToken) {
       return;
     }
+    if (!canManageTemplates) {
+      setStatus('Only admin and DevOps users can save env approval templates.');
+      return;
+    }
+
+    const isExistingTemplate = envTemplates.some(
+      (template) => template.project === envTemplateForm.project.trim() && template.repo === envTemplateForm.repo.trim(),
+    );
 
     updateLoading('envApprovalSaveTemplate', true);
     try {
       await envApprovalApi.saveTemplate(authToken, envTemplateForm);
       await loadEnvApprovalTemplates(authToken);
-      setStatus('Env approval template saved.');
+      setStatus(isExistingTemplate ? 'Env approval template updated.' : 'Env approval template saved.');
     } catch {
       setStatus('Unable to save env approval template.');
     } finally {
       updateLoading('envApprovalSaveTemplate', false);
     }
+  };
+
+  const editEnvApprovalTemplate = (template: EnvApprovalTemplate) => {
+    setEnvTemplateForm({
+      project: template.project,
+      repo: template.repo,
+      repo_url: template.repo_url ?? '',
+      resource_type: template.resource_type,
+      environments: template.environments.map((environment) => ({
+        name: environment.name,
+        resource_name: environment.resource_name ?? '',
+        resource_group: environment.resource_group ?? '',
+        subscription_id: environment.subscription_id ?? '',
+      })),
+    });
+    setEnvNewTemplateEnvName('');
+    setStatus(`Editing template ${template.project} / ${template.repo}. Save to update it.`);
+  };
+
+  const resetEnvApprovalTemplateForm = () => {
+    setEnvTemplateForm(buildInitialTemplateForm());
+    setEnvNewTemplateEnvName('');
+    setStatus('Template editor reset.');
   };
 
   const addEnvTemplateEnvironment = () => {
@@ -534,6 +602,10 @@ function App() {
     if (!authToken) {
       return;
     }
+    if (!canManageFlows) {
+      setStatus('Only admin and devops users can create env approval flows.');
+      return;
+    }
 
     updateLoading('envApprovalCreateFlow', true);
     try {
@@ -593,6 +665,10 @@ function App() {
     if (!authToken || !envSelectedFlowId) {
       return;
     }
+    if (!canManageFlows) {
+      setStatus('Only admin and devops users can update env approval values.');
+      return;
+    }
 
     updateLoading('envApprovalUpdateValues', true);
     try {
@@ -610,6 +686,10 @@ function App() {
 
   const applyEnvApprovalFlow = async (environmentName?: string) => {
     if (!authToken || !envSelectedFlowId) {
+      return;
+    }
+    if (!canApplyFlows) {
+      setStatus('A valid env approval role is required to apply flows.');
       return;
     }
 
@@ -633,6 +713,10 @@ function App() {
 
   const rollbackEnvApprovalFlow = async (snapshotId: string) => {
     if (!authToken || !envSelectedFlowId) {
+      return;
+    }
+    if (!canManageFlows) {
+      setStatus('Only admin and devops users can run rollback.');
       return;
     }
 
@@ -710,7 +794,9 @@ function App() {
     try {
       const response = await fetch(`${API}/api/admin/pending-users?auth_token=${token}`);
       if (response.ok) {
-        setPendingUsers((await response.json()) as PendingUser[]);
+        const items = (await response.json()) as PendingUser[];
+        setPendingUsers(items);
+        setPendingUserRoles((previous) => buildPendingUserRoles(items, previous));
       }
     } finally {
       updateLoading('pendingUsers', false);
@@ -803,6 +889,7 @@ function App() {
       setAuthToken(payload.auth_token);
       setUserEmail(payload.email);
       setUserName(payload.username);
+      setUserRole(payload.role);
       setIsAdmin(payload.is_admin);
       setIsApproved(payload.approved);
       if (!payload.approved) {
@@ -813,7 +900,7 @@ function App() {
       if (payload.is_admin) {
         await loadPendingUsers(payload.auth_token);
       }
-      setStatus(`✅ Welcome ${payload.username}! Choose Dashboard, DevOps, or Env Approval Flow.`);
+      setStatus(`✅ Welcome ${payload.username} (${payload.role})! Choose Dashboard, DevOps, or Env Approval Flow.`);
       setStep('homeChoice');
     } catch {
       setStatus('❌ Network error during login.');
@@ -892,16 +979,16 @@ function App() {
     }
   };
 
-  const approveUser = async (userId: string) => {
+  const approveUser = async (userId: string, role: UserRole) => {
     if (!authToken) {
       return;
     }
 
     setApprovingUserId(userId);
     try {
-      await fetch(`${API}/api/admin/users/${userId}/approve?auth_token=${authToken}`, { method: 'POST' });
+      await fetch(`${API}/api/admin/users/${userId}/approve?auth_token=${authToken}&role=${encodeURIComponent(role)}`, { method: 'POST' });
       await loadPendingUsers();
-      setStatus('User approved.');
+      setStatus(`User approved with ${role} role.`);
     } finally {
       setApprovingUserId(null);
     }
@@ -1104,10 +1191,12 @@ function App() {
     setAuthToken(null);
     setUserEmail('');
     setUserName('');
+    setUserRole(null);
     setIsAdmin(false);
     setIsApproved(false);
     setDashboards([]);
     setPendingUsers([]);
+    setPendingUserRoles({});
     setDashboardName('');
     setDashboardDescription('');
     setSelectedDashboardId('');
@@ -1263,7 +1352,11 @@ function App() {
       {!loadingState.appBoot && step === 'envApproval' ? (
         <EnvApprovalWorkspaceView
           userName={userName}
+          userRole={userRole}
           isAdmin={isAdmin}
+          canManageTemplates={canManageTemplates}
+          canManageFlows={canManageFlows}
+          canApplyFlows={canApplyFlows}
           templates={envTemplates}
           flows={envFlows}
           selectedFlowId={envSelectedFlowId}
@@ -1314,6 +1407,8 @@ function App() {
           onSaveTemplate={() => {
             void saveEnvApprovalTemplate();
           }}
+          onEditTemplate={editEnvApprovalTemplate}
+          onResetTemplateForm={resetEnvApprovalTemplateForm}
           onAddTemplateEnvironment={addEnvTemplateEnvironment}
           onRemoveTemplateEnvironment={removeEnvTemplateEnvironment}
           onApplySelectedTemplate={applySelectedEnvTemplate}
@@ -1360,6 +1455,7 @@ function App() {
           isAdmin={isAdmin}
           dashboards={dashboards}
           pendingUsers={pendingUsers}
+          pendingUserRoles={pendingUserRoles}
           selectedDashboardId={selectedDashboardId}
           dashboardResources={dashboardResources}
           filteredDashboardResources={filteredDashboardResources}
@@ -1425,8 +1521,11 @@ function App() {
           onRefreshPendingUsers={() => {
             void loadPendingUsers();
           }}
-          onApproveUser={(userId) => {
-            void approveUser(userId);
+          onPendingUserRoleChange={(userId, role) => {
+            setPendingUserRoles((previous) => ({ ...previous, [userId]: role }));
+          }}
+          onApproveUser={(userId, role) => {
+            void approveUser(userId, role);
           }}
         />
       ) : null}

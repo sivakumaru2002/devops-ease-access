@@ -8,6 +8,7 @@ from pymongo import MongoClient
 from pymongo.errors import PyMongoError
 
 from .config import settings
+from .env_azure_service import get_env_azure_service
 
 
 def _utcnow() -> datetime:
@@ -188,17 +189,15 @@ class EnvFlowStore:
         rows.sort(key=lambda item: item["created_at"], reverse=True)
         return [deepcopy(row) for row in rows]
 
-    def rollback_flow(self, flow_id: str, snapshot_id: str, rolled_back_by: str) -> dict[str, Any] | None:
-        flow = self.get_flow(flow_id)
-        snapshot = self.get_snapshot(snapshot_id)
-        if not flow or not snapshot or snapshot.get("flow_id") != flow_id:
-            return None
-
-        self._create_snapshot(flow_id, flow["environments"], "pre_change", rolled_back_by, f"Pre-rollback to {snapshot_id}")
-
-        current_by_name = {env["name"]: env for env in flow["environments"]}
+    def _merge_snapshot_environments(
+        self,
+        current_environments: list[dict[str, Any]],
+        snapshot_environments: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        current_by_name = {env["name"]: env for env in current_environments}
         restored = []
-        for env in snapshot["environments"]:
+
+        for env in snapshot_environments:
             current = current_by_name.get(env["name"], {})
             restored.append(
                 {
@@ -210,16 +209,132 @@ class EnvFlowStore:
                 }
             )
 
-        for env in flow["environments"]:
-            if env["name"] not in {item["name"] for item in restored}:
+        restored_names = {item["name"] for item in restored}
+        for env in current_environments:
+            if env["name"] not in restored_names:
                 restored.append(deepcopy(env))
+
+        return restored
+
+    def _resolve_resource_target(
+        self,
+        flow: dict[str, Any],
+        environment: dict[str, Any],
+    ) -> tuple[str | None, str | None, str | None, str | None]:
+        return (
+            environment.get("resource_name") or flow.get("resource_name"),
+            environment.get("resource_group") or flow.get("resource_group"),
+            environment.get("subscription_id") or flow.get("subscription_id"),
+            flow.get("resource_type"),
+        )
+
+    async def _read_current_settings(
+        self,
+        azure_service: Any,
+        resource_type: str | None,
+        resource_group: str,
+        resource_name: str,
+        subscription_id: str | None,
+    ) -> dict[str, str] | None:
+        if resource_type == "webapp":
+            return await azure_service.get_webapp_settings(resource_group, resource_name, subscription_id)
+        if resource_type == "function_app":
+            return await azure_service.get_function_app_settings(resource_group, resource_name, subscription_id)
+        return None
+
+    async def _apply_settings(
+        self,
+        azure_service: Any,
+        resource_type: str | None,
+        resource_group: str,
+        resource_name: str,
+        merged_settings: dict[str, str],
+        subscription_id: str | None,
+    ) -> tuple[bool, str, dict[str, Any]]:
+        if resource_type == "webapp":
+            return await azure_service.apply_to_webapp(resource_group, resource_name, merged_settings, subscription_id)
+        if resource_type == "function_app":
+            return await azure_service.apply_to_function_app(resource_group, resource_name, merged_settings, subscription_id)
+        return False, f"Unknown resource type: {resource_type}", {}
+
+    async def _apply_environment_payload(
+        self,
+        flow: dict[str, Any],
+        environment: dict[str, Any],
+        payload_values: dict[str, str],
+    ) -> tuple[bool, str]:
+        env_name = environment.get("name") or "unknown"
+        resource_name, resource_group, subscription_id, resource_type = self._resolve_resource_target(flow, environment)
+        if not resource_name or not resource_group:
+            return False, "Missing resource_name/resource_group for this environment"
+
+        azure_service = get_env_azure_service()
+        current_settings = await self._read_current_settings(
+            azure_service,
+            resource_type,
+            resource_group,
+            resource_name,
+            subscription_id,
+        )
+        if current_settings is None:
+            return False, "Could not read current settings from Azure"
+
+        merged_settings = dict(current_settings)
+        merged_settings.update(payload_values)
+        success, message, details = await self._apply_settings(
+            azure_service,
+            resource_type,
+            resource_group,
+            resource_name,
+            merged_settings,
+            subscription_id,
+        )
+        if success:
+            return True, env_name
+        return False, details.get("error", message)
+
+    def _build_apply_status(self, applied_envs: list[str], failed_envs: list[str]) -> tuple[str, str]:
+        if applied_envs and not failed_envs:
+            return "success", f"Applied {len(applied_envs)} environment(s) successfully."
+        if applied_envs:
+            return "partial", f"Applied {len(applied_envs)} environment(s); {len(failed_envs)} failed."
+        return "failed", "No environments were applied successfully."
+
+    async def rollback_flow(self, flow_id: str, snapshot_id: str, rolled_back_by: str) -> dict[str, Any] | None:
+        flow = self.get_flow(flow_id)
+        snapshot = self.get_snapshot(snapshot_id)
+        if not flow or not snapshot or snapshot.get("flow_id") != flow_id:
+            return None
+
+        self._create_snapshot(flow_id, flow["environments"], "pre_change", rolled_back_by, f"Pre-rollback to {snapshot_id}")
+
+        restored = self._merge_snapshot_environments(flow["environments"], snapshot["environments"])
+        azure_failures: dict[str, str] = {}
+
+        for environment in restored:
+            env_name = environment.get("name") or "unknown"
+            restored_values = {
+                item.get("key"): item.get("value")
+                for item in environment.get("values", [])
+                if item.get("key") is not None
+            }
+            if not restored_values:
+                continue
+
+            success, message = await self._apply_environment_payload(flow, environment, restored_values)
+            if not success:
+                azure_failures[env_name] = message
+
+        if azure_failures:
+            failure_summary = "; ".join(f"{name}: {reason}" for name, reason in azure_failures.items())
+            raise ValueError(f"Rollback aborted: failed to apply restored settings to Azure. {failure_summary}")
 
         self._persist_flow_update(flow_id, {"environments": restored, "updated_at": _utcnow()})
         self._create_snapshot(flow_id, restored, "post_change", rolled_back_by, f"Rolled back to snapshot {snapshot_id}")
         self._log_audit(flow_id, "flow_rollback", rolled_back_by, {"snapshot_id": snapshot_id})
         return self.get_flow(flow_id)
 
-    def apply_flow(self, flow_id: str, environments: list[str] | None, approved_by: str, approval_reason: str | None) -> dict[str, Any] | None:
+    async def apply_flow(self, flow_id: str, environments: list[str] | None, approved_by: str, approval_reason: str | None) -> dict[str, Any] | None:
         flow = self.get_flow(flow_id)
         if not flow:
             return None
@@ -230,6 +345,26 @@ class EnvFlowStore:
         if invalid:
             raise ValueError(f"Unknown environment(s): {', '.join(invalid)}")
 
+        applied_envs: list[str] = []
+        failed_envs: list[str] = []
+        error_details: dict[str, str] = {}
+
+        for environment in flow["environments"]:
+            env_name = environment["name"]
+            if env_name not in requested:
+                continue
+
+            flow_vars = {item["key"]: item["value"] for item in environment.get("values", [])}
+            if not flow_vars:
+                continue
+
+            success, message = await self._apply_environment_payload(flow, environment, flow_vars)
+            if success:
+                applied_envs.append(env_name)
+            else:
+                failed_envs.append(env_name)
+                error_details[env_name] = message
+
         applied_at = _utcnow()
         self._log_audit(
             flow_id,
@@ -239,16 +374,18 @@ class EnvFlowStore:
                 "environments": requested,
                 "approval_reason": approval_reason,
                 "applied_at": applied_at.isoformat(),
+                "errors": error_details,
             },
         )
         self._persist_flow_update(flow_id, {"updated_at": applied_at})
+        status, message = self._build_apply_status(applied_envs, failed_envs)
         return {
             "flow_id": flow_id,
-            "status": "success",
-            "message": f"Approved and queued for apply across {len(requested)} environment(s).",
+            "status": status,
+            "message": message,
             "applied_at": applied_at,
-            "applied_envs": requested,
-            "failed_envs": [],
+            "applied_envs": applied_envs,
+            "failed_envs": failed_envs,
         }
 
     def get_snapshot(self, snapshot_id: str) -> dict[str, Any] | None:

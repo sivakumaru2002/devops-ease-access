@@ -1,5 +1,7 @@
 export type Step = 'userAuth' | 'homeChoice' | 'dashboardPortal' | 'devopsLogin' | 'projects' | 'dashboard' | 'envApproval';
 
+export type UserRole = 'admin' | 'devops' | 'tester';
+
 export type ConnectResponse = {
   session_id: string;
   organization: string;
@@ -10,6 +12,7 @@ export type AuthResponse = {
   auth_token: string;
   email: string;
   username: string;
+  role: UserRole;
   is_admin: boolean;
   approved: boolean;
 };
@@ -44,6 +47,7 @@ export type PendingUser = {
   id: string;
   email: string;
   username: string;
+  role: UserRole;
 };
 
 export type Project = {
@@ -101,6 +105,7 @@ export type PersistedAppState = {
   authToken: string;
   userEmail: string;
   userName: string;
+  userRole: UserRole | null;
   isAdmin: boolean;
   isApproved: boolean;
   step: Step;

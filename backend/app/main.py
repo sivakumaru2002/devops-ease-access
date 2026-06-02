@@ -17,6 +17,7 @@ from .azure_devops import AzureDevOpsClient
 from .cache import TTLCache
 from .config import settings
 from .env_flow_store import EnvFlowStore
+from .env_azure_service import get_env_azure_service
 from .models import (
     AuthResponse,
     ConnectRequest,
@@ -41,6 +42,7 @@ from .models import (
     EnvApprovalTemplateItem,
     EnvApprovalTemplateRequest,
     EnvApprovalUpdateValuesRequest,
+    UserRole,
 )
 from .resources_store import ResourceStore
 from .security import decrypt_secret, encrypt_secret
@@ -99,6 +101,14 @@ def _require_admin(auth_token: str) -> dict:
     return user
 
 
+def _require_approved_roles(auth_token: str, *allowed_roles: UserRole) -> dict:
+    user = _require_approved_user(auth_token)
+    role = str(user.get("role") or "").strip().lower()
+    if role not in allowed_roles:
+        raise HTTPException(403, "You do not have access to this action")
+    return user
+
+
 def _get_session(session_id: str) -> dict:
     session = session_store.get(session_id)
     if not session:
@@ -127,6 +137,7 @@ async def register_user(payload: RegisterRequest) -> dict:
             "id": created["id"],
             "email": created["email"],
             "username": created["username"],
+            "role": created["role"],
             "approved": created["approved"],
         },
     }
@@ -148,6 +159,7 @@ async def login_user(payload: LoginRequest) -> AuthResponse:
         auth_token=auth_token,
         email=user["email"],
         username=user["username"],
+        role=user["role"],
         is_admin=bool(user.get("is_admin")),
         approved=bool(user.get("approved")),
     )
@@ -159,6 +171,7 @@ async def auth_me(auth_token: str) -> dict:
     return {
         "email": user["email"],
         "username": user["username"],
+        "role": user["role"],
         "is_admin": bool(user.get("is_admin")),
         "approved": bool(user.get("approved")),
     }
@@ -173,6 +186,7 @@ async def list_pending_users(auth_token: str) -> list[PendingUserItem]:
             id=row["id"],
             email=row["email"],
             username=row["username"],
+            role=row["role"],
             approved=bool(row.get("approved")),
             is_admin=bool(row.get("is_admin")),
             created_at=row["created_at"],
@@ -182,9 +196,9 @@ async def list_pending_users(auth_token: str) -> list[PendingUserItem]:
 
 
 @app.post("/api/admin/users/{user_id}/approve")
-async def approve_user(user_id: str, auth_token: str) -> dict:
+async def approve_user(user_id: str, auth_token: str, role: UserRole = "tester") -> dict:
     _require_admin(auth_token)
-    updated = user_store.approve_user(user_id)
+    updated = user_store.approve_user(user_id, role)
     if not updated:
         raise HTTPException(404, "User not found")
     return {
@@ -193,6 +207,7 @@ async def approve_user(user_id: str, auth_token: str) -> dict:
             "id": updated["id"],
             "email": updated["email"],
             "username": updated["username"],
+            "role": updated["role"],
             "approved": bool(updated.get("approved")),
         },
     }
@@ -557,7 +572,7 @@ async def error_intelligence(project: str, pipeline_id: int, session_id: str, ru
 
 @app.get("/api/env-approval/templates", response_model=list[EnvApprovalTemplateItem])
 async def list_env_approval_templates(auth_token: str) -> list[EnvApprovalTemplateItem]:
-    _require_approved_user(auth_token)
+    _require_approved_roles(auth_token, "admin", "devops", "tester")
     rows = env_flow_store.list_templates()
     return [EnvApprovalTemplateItem(**row) for row in rows]
 
@@ -567,7 +582,7 @@ async def save_env_approval_template(
     payload: EnvApprovalTemplateRequest,
     auth_token: str,
 ) -> EnvApprovalTemplateItem:
-    user = _require_admin(auth_token)
+    user = _require_approved_roles(auth_token, "admin", "devops")
     saved = env_flow_store.save_template(
         {
             "project": payload.project,
@@ -583,7 +598,7 @@ async def save_env_approval_template(
 
 @app.get("/api/env-approval/flows", response_model=list[EnvApprovalFlowItem])
 async def list_env_approval_flows(auth_token: str) -> list[EnvApprovalFlowItem]:
-    _require_approved_user(auth_token)
+    _require_approved_roles(auth_token, "admin", "devops", "tester")
     rows = env_flow_store.list_flows()
     return [EnvApprovalFlowItem(**row) for row in rows]
 
@@ -593,7 +608,7 @@ async def create_env_approval_flow(
     payload: EnvApprovalFlowCreateRequest,
     auth_token: str,
 ) -> EnvApprovalFlowItem:
-    user = _require_approved_user(auth_token)
+    user = _require_approved_roles(auth_token, "admin", "devops")
     created = env_flow_store.create_flow(
         {
             **payload.model_dump(),
@@ -605,7 +620,7 @@ async def create_env_approval_flow(
 
 @app.get("/api/env-approval/flows/{flow_id}", response_model=EnvApprovalFlowItem)
 async def get_env_approval_flow(flow_id: str, auth_token: str) -> EnvApprovalFlowItem:
-    _require_approved_user(auth_token)
+    _require_approved_roles(auth_token, "admin", "devops", "tester")
     row = env_flow_store.get_flow(flow_id)
     if not row:
         raise HTTPException(404, ENV_FLOW_NOT_FOUND)
@@ -618,7 +633,7 @@ async def update_env_approval_flow_values(
     payload: EnvApprovalUpdateValuesRequest,
     auth_token: str,
 ) -> EnvApprovalFlowItem:
-    user = _require_approved_user(auth_token)
+    user = _require_approved_roles(auth_token, "admin", "devops")
     try:
         updated = env_flow_store.update_flow_values(flow_id, payload.key, payload.values, user["username"])
     except ValueError as ex:
@@ -630,7 +645,7 @@ async def update_env_approval_flow_values(
 
 @app.get("/api/env-approval/flows/{flow_id}/snapshots", response_model=list[EnvApprovalSnapshotItem])
 async def list_env_approval_snapshots(flow_id: str, auth_token: str) -> list[EnvApprovalSnapshotItem]:
-    _require_approved_user(auth_token)
+    _require_approved_roles(auth_token, "admin", "devops", "tester")
     if not env_flow_store.get_flow(flow_id):
         raise HTTPException(404, ENV_FLOW_NOT_FOUND)
     rows = env_flow_store.list_snapshots(flow_id)
@@ -639,8 +654,11 @@ async def list_env_approval_snapshots(flow_id: str, auth_token: str) -> list[Env
 
 @app.post("/api/env-approval/flows/{flow_id}/rollback/{snapshot_id}", response_model=EnvApprovalFlowItem)
 async def rollback_env_approval_flow(flow_id: str, snapshot_id: str, auth_token: str) -> EnvApprovalFlowItem:
-    user = _require_approved_user(auth_token)
-    row = env_flow_store.rollback_flow(flow_id, snapshot_id, user["username"])
+    user = _require_approved_roles(auth_token, "admin", "devops")
+    try:
+        row = await env_flow_store.rollback_flow(flow_id, snapshot_id, user["username"])
+    except ValueError as ex:
+        raise HTTPException(400, str(ex)) from ex
     if not row:
         raise HTTPException(404, "Env approval flow or snapshot not found")
     return EnvApprovalFlowItem(**row)
@@ -652,14 +670,21 @@ async def apply_env_approval_flow(
     payload: EnvApprovalApplyRequest,
     auth_token: str,
 ) -> EnvApprovalApplyResult:
-    user = _require_approved_user(auth_token)
+    user = _require_approved_roles(auth_token, "admin", "devops", "tester")
     try:
-        result = env_flow_store.apply_flow(flow_id, payload.environments, user["username"], payload.approval_reason)
+        result = await env_flow_store.apply_flow(flow_id, payload.environments, user["username"], payload.approval_reason)
     except ValueError as ex:
         raise HTTPException(400, str(ex)) from ex
     if not result:
         raise HTTPException(404, ENV_FLOW_NOT_FOUND)
     return EnvApprovalApplyResult(**result)
+
+
+@app.post("/api/env-approval/azure/validate")
+async def validate_env_approval_azure(auth_token: str) -> dict:
+    _require_approved_roles(auth_token, "admin", "devops", "tester")
+    valid, message = await get_env_azure_service().validate_credentials()
+    return {"valid": valid, "message": message}
 
 
 if __name__ == "__main__":

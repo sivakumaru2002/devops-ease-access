@@ -1,6 +1,7 @@
 import type { ChangeEvent, Dispatch, FormEventHandler, SetStateAction } from 'react';
 
 import { ButtonLabel, LoadingMessage } from '../components/Loading';
+import type { UserRole } from '../types';
 import type {
   EnvApprovalApplyResult,
   EnvApprovalCreateForm,
@@ -16,7 +17,11 @@ type CreateFormSetter = Dispatch<SetStateAction<EnvApprovalCreateForm>>;
 
 type EnvApprovalWorkspaceViewProps = Readonly<{
   userName: string;
+  userRole: UserRole | null;
   isAdmin: boolean;
+  canManageTemplates: boolean;
+  canManageFlows: boolean;
+  canApplyFlows: boolean;
   templates: EnvApprovalTemplate[];
   flows: EnvApprovalFlow[];
   selectedFlowId: string;
@@ -63,6 +68,8 @@ type EnvApprovalWorkspaceViewProps = Readonly<{
   onBack: () => void;
   onRefreshTemplates: () => void;
   onSaveTemplate: () => void;
+  onEditTemplate: (template: EnvApprovalTemplate) => void;
+  onResetTemplateForm: () => void;
   onAddTemplateEnvironment: () => void;
   onRemoveTemplateEnvironment: (envName: string) => void;
   onApplySelectedTemplate: () => void;
@@ -86,7 +93,11 @@ type EnvApprovalWorkspaceViewProps = Readonly<{
 
 function EnvApprovalWorkspaceView({
   userName,
+  userRole,
   isAdmin,
+  canManageTemplates,
+  canManageFlows,
+  canApplyFlows,
   templates,
   flows,
   selectedFlowId,
@@ -133,6 +144,8 @@ function EnvApprovalWorkspaceView({
   onBack,
   onRefreshTemplates,
   onSaveTemplate,
+  onEditTemplate,
+  onResetTemplateForm,
   onAddTemplateEnvironment,
   onRemoveTemplateEnvironment,
   onApplySelectedTemplate,
@@ -162,6 +175,9 @@ function EnvApprovalWorkspaceView({
   const selectedFlowKeys = selectedFlow
     ? [...new Set(selectedFlow.environments.flatMap((environment) => environment.values.map((value) => value.key)))].sort((left, right) => left.localeCompare(right))
     : [];
+  const showTemplateRegistry = userRole !== 'tester';
+  const showCreateFlow = userRole !== 'tester';
+  const editableTemplate = templates.find((template) => template.project === templateForm.project && template.repo === templateForm.repo) ?? null;
 
   return (
     <main className="single-page env-approval-page">
@@ -174,11 +190,13 @@ function EnvApprovalWorkspaceView({
           <button className="small btn-secondary" onClick={onBack}>← Back</button>
         </div>
         <div className="env-approval-summary-grid">
-          <article className="env-summary-card">
-            <h3>Template Registry</h3>
-            <p>{isAdmin ? 'Admin-managed environment targets and repo mappings.' : 'View the templates admins publish for flow creation.'}</p>
-            <strong>{templates.length} templates</strong>
-          </article>
+          {showTemplateRegistry ? (
+            <article className="env-summary-card">
+              <h3>Template Registry</h3>
+              <p>{canManageTemplates ? 'Admin and DevOps users can manage shared environment targets and repo mappings.' : 'View the templates admins and DevOps users publish for flow creation.'}</p>
+              <strong>{templates.length} templates</strong>
+            </article>
+          ) : null}
           <article className="env-summary-card">
             <h3>Release Flows</h3>
             <p>Track the environment variable sets tied to Azure release execution.</p>
@@ -186,88 +204,143 @@ function EnvApprovalWorkspaceView({
           </article>
           <article className="env-summary-card">
             <h3>Approval Operator</h3>
-            <p>Current operator: {userName}</p>
+            <p>Current operator: {userName}{userRole ? ` (${userRole})` : ''}</p>
             <strong>{selectedFlow?.flow_name ?? 'No flow selected'}</strong>
           </article>
         </div>
       </section>
 
-      {isAdmin ? (
+      {showTemplateRegistry ? (
         <section className="card">
           <div className="row-between">
             <div>
               <h3>Template Registry</h3>
-              <p className="muted">Define a project/repo once, including per-environment target resources.</p>
+              <p className="muted">{canManageTemplates ? 'Define a project/repo once, including per-environment target resources.' : 'Admins and DevOps users publish shared templates here for the rest of the workspace.'}</p>
             </div>
             <button className="small btn-secondary" onClick={onRefreshTemplates} disabled={loadingTemplates}>
               <ButtonLabel loading={loadingTemplates} idle="Refresh Templates" busy="Refreshing templates..." />
             </button>
           </div>
+          {!canManageTemplates ? <p className="muted">Only admin and DevOps users can create or edit templates. You still have read access to the template catalog.</p> : null}
           {loadingTemplates ? <LoadingMessage title="Loading templates" detail="Fetching the latest saved project and repo mappings." compact /> : null}
-          <div className="row env-input-row">
-            <input placeholder="Project" value={templateForm.project} onChange={(event) => setTemplateForm((previous) => ({ ...previous, project: event.target.value }))} />
-            <input placeholder="Repository" value={templateForm.repo} onChange={(event) => setTemplateForm((previous) => ({ ...previous, repo: event.target.value }))} />
-            <input placeholder="Repository URL" value={templateForm.repo_url} onChange={(event) => setTemplateForm((previous) => ({ ...previous, repo_url: event.target.value }))} />
-            <select value={templateForm.resource_type} onChange={(event) => setTemplateForm((previous) => ({ ...previous, resource_type: event.target.value as EnvApprovalCreateForm['resource_type'] }))}>
-              <option value="webapp">WebApp</option>
-              <option value="function_app">Function App</option>
-            </select>
-          </div>
-          <div className="row env-input-row">
-            <input
-              placeholder="New template environment"
-              value={newTemplateEnvName}
-              onChange={(event) => setNewTemplateEnvName(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter') {
-                  event.preventDefault();
-                  onAddTemplateEnvironment();
-                }
-              }}
-            />
-            <button type="button" className="small btn-secondary" onClick={onAddTemplateEnvironment}>Add Environment</button>
-            <button type="button" className="small btn-success" onClick={onSaveTemplate} disabled={loadingSaveTemplate}>
-              <ButtonLabel loading={loadingSaveTemplate} idle="Save Template" busy="Saving template..." />
-            </button>
-          </div>
-          <div className="table-wrap">
-            <table className="resource-table">
-              <thead>
-                <tr>
-                  <th>Environment</th>
-                  <th>Resource Name</th>
-                  <th>Resource Group</th>
-                  <th>Subscription ID</th>
-                  <th>Action</th>
-                </tr>
-              </thead>
-              <tbody>
-                {templateForm.environments.map((environment) => (
-                  <tr key={`template-${environment.name}`}>
-                    <td><strong>{environment.name}</strong></td>
-                    <td><input value={environment.resource_name} onChange={(event) => setTemplateForm((previous) => ({ ...previous, environments: previous.environments.map((item) => item.name === environment.name ? { ...item, resource_name: event.target.value } : item) }))} /></td>
-                    <td><input value={environment.resource_group} onChange={(event) => setTemplateForm((previous) => ({ ...previous, environments: previous.environments.map((item) => item.name === environment.name ? { ...item, resource_group: event.target.value } : item) }))} /></td>
-                    <td><input value={environment.subscription_id} onChange={(event) => setTemplateForm((previous) => ({ ...previous, environments: previous.environments.map((item) => item.name === environment.name ? { ...item, subscription_id: event.target.value } : item) }))} /></td>
-                    <td><button type="button" className="small btn-secondary" onClick={() => onRemoveTemplateEnvironment(environment.name)}>Delete</button></td>
+          <fieldset disabled={!canManageTemplates}>
+            {editableTemplate ? <p className="muted">Editing {editableTemplate.project} / {editableTemplate.repo}. Saving will update this template.</p> : null}
+            <div className="row env-input-row">
+              <input placeholder="Project" value={templateForm.project} onChange={(event) => setTemplateForm((previous) => ({ ...previous, project: event.target.value }))} />
+              <input placeholder="Repository" value={templateForm.repo} onChange={(event) => setTemplateForm((previous) => ({ ...previous, repo: event.target.value }))} />
+              <input placeholder="Repository URL" value={templateForm.repo_url} onChange={(event) => setTemplateForm((previous) => ({ ...previous, repo_url: event.target.value }))} />
+              <select value={templateForm.resource_type} onChange={(event) => setTemplateForm((previous) => ({ ...previous, resource_type: event.target.value as EnvApprovalCreateForm['resource_type'] }))}>
+                <option value="webapp">WebApp</option>
+                <option value="function_app">Function App</option>
+              </select>
+            </div>
+            <div className="row env-input-row">
+              <input
+                placeholder="New template environment"
+                value={newTemplateEnvName}
+                onChange={(event) => setNewTemplateEnvName(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') {
+                    event.preventDefault();
+                    onAddTemplateEnvironment();
+                  }
+                }}
+              />
+              <button type="button" className="small btn-secondary" onClick={onAddTemplateEnvironment}>Add Environment</button>
+              <button type="button" className="small btn-secondary" onClick={onResetTemplateForm} disabled={loadingSaveTemplate}>
+                New Template
+              </button>
+              <button type="button" className="small btn-success" onClick={onSaveTemplate} disabled={loadingSaveTemplate || !canManageTemplates}>
+                <ButtonLabel loading={loadingSaveTemplate} idle={editableTemplate ? 'Update Template' : 'Save Template'} busy={editableTemplate ? 'Updating template...' : 'Saving template...'} />
+              </button>
+            </div>
+            <div className="table-wrap">
+              <table className="resource-table">
+                <thead>
+                  <tr>
+                    <th>Environment</th>
+                    <th>Resource Name</th>
+                    <th>Resource Group</th>
+                    <th>Subscription ID</th>
+                    <th>Action</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {templateForm.environments.map((environment) => (
+                    <tr key={`template-${environment.name}`}>
+                      <td><strong>{environment.name}</strong></td>
+                      <td><input value={environment.resource_name} onChange={(event) => setTemplateForm((previous) => ({ ...previous, environments: previous.environments.map((item) => item.name === environment.name ? { ...item, resource_name: event.target.value } : item) }))} /></td>
+                      <td><input value={environment.resource_group} onChange={(event) => setTemplateForm((previous) => ({ ...previous, environments: previous.environments.map((item) => item.name === environment.name ? { ...item, resource_group: event.target.value } : item) }))} /></td>
+                      <td><input value={environment.subscription_id} onChange={(event) => setTemplateForm((previous) => ({ ...previous, environments: previous.environments.map((item) => item.name === environment.name ? { ...item, subscription_id: event.target.value } : item) }))} /></td>
+                      <td><button type="button" className="small btn-secondary" onClick={() => onRemoveTemplateEnvironment(environment.name)}>Delete</button></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </fieldset>
+          <div className="subcard-lite">
+            <div className="row-between">
+              <div>
+                <h4>Saved Templates</h4>
+                <p className="muted">Load an existing template into the editor to update its environments or repo details.</p>
+              </div>
+            </div>
+            <div className="table-wrap">
+              <table className="resource-table">
+                <thead>
+                  <tr>
+                    <th>Project</th>
+                    <th>Repository</th>
+                    <th>Updated By</th>
+                    <th>Updated At</th>
+                    <th>Action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {templates.length ? templates.map((template) => (
+                    <tr key={template.id}>
+                      <td><strong>{template.project}</strong></td>
+                      <td>{template.repo}</td>
+                      <td>{template.updated_by}</td>
+                      <td>{new Date(template.updated_at).toLocaleString()}</td>
+                      <td>
+                        <button
+                          type="button"
+                          className="small btn-secondary"
+                          onClick={() => onEditTemplate(template)}
+                          disabled={!canManageTemplates}
+                        >
+                          Edit Template
+                        </button>
+                      </td>
+                    </tr>
+                  )) : (
+                    <tr>
+                      <td colSpan={5} className="muted">No templates saved yet.</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
           </div>
         </section>
       ) : null}
 
-      <section className="card">
-        <div className="row-between">
-          <div>
-            <h3>Create Flow</h3>
-            <p className="muted">Create a release-scoped flow from scratch or start from an admin template.</p>
+      {showCreateFlow ? (
+        <section className="card">
+          <div className="row-between">
+            <div>
+              <h3>Create Flow</h3>
+              <p className="muted">Create a release-scoped flow from scratch or start from an admin template.</p>
+            </div>
+            <button className="small btn-secondary" onClick={onRefreshFlows} disabled={loadingFlows}>
+              <ButtonLabel loading={loadingFlows} idle="Refresh Flows" busy="Refreshing flows..." />
+            </button>
           </div>
-          <button className="small btn-secondary" onClick={onRefreshFlows} disabled={loadingFlows}>
-            <ButtonLabel loading={loadingFlows} idle="Refresh Flows" busy="Refreshing flows..." />
-          </button>
-        </div>
-        <form onSubmit={onCreateFlow} className="stack-form">
+          <form onSubmit={onCreateFlow} className="stack-form">
+            {!canManageFlows ? <p className="muted">Only admin and devops users can create flows or update configuration values.</p> : null}
+            <fieldset disabled={!canManageFlows}>
           <div className="row env-input-row">
             <input placeholder="Flow Name" value={createForm.flow_name} onChange={(event) => setCreateForm((previous) => ({ ...previous, flow_name: event.target.value }))} required />
             <input placeholder="Repository URL" value={createForm.repo_url} onChange={(event) => setCreateForm((previous) => ({ ...previous, repo_url: event.target.value }))} required />
@@ -360,11 +433,13 @@ function EnvApprovalWorkspaceView({
               </table>
             </div>
           </div>
-          <button type="submit" className="btn-success" disabled={loadingCreateFlow}>
+          <button type="submit" className="btn-success" disabled={loadingCreateFlow || !canManageFlows}>
             <ButtonLabel loading={loadingCreateFlow} idle="Create Flow" busy="Creating flow..." />
           </button>
+          </fieldset>
         </form>
-      </section>
+        </section>
+      ) : null}
 
       <section className="card">
         <div className="row-between">
@@ -390,6 +465,8 @@ function EnvApprovalWorkspaceView({
               <p><strong>Resource Type:</strong> {selectedFlow.resource_type}</p>
             </div>
             <form onSubmit={onSubmitUpdateValues} className="subcard-lite stack-form">
+              {!canManageFlows ? <p className="muted">Tester role is read/apply only. Updating values and rollback require admin or devops.</p> : null}
+              <fieldset disabled={!canManageFlows}>
               <div className="row env-input-row">
                 <input list="env-flow-keys" placeholder="Key name" value={updateKey} onChange={(event) => setUpdateKey(event.target.value)} required />
                 <datalist id="env-flow-keys">
@@ -413,24 +490,28 @@ function EnvApprovalWorkspaceView({
                 <button type="button" className="small btn-secondary" onClick={onApplyEditTextImport}>Import To Environment</button>
               </div>
               <textarea className="env-editor" value={editImportText} onChange={(event) => setEditImportText(event.target.value)} placeholder="Paste .env or JSON content here to update one selected environment." />
-              <button type="submit" className="btn-warning" disabled={loadingUpdateValues}>
+              <button type="submit" className="btn-warning" disabled={loadingUpdateValues || !canManageFlows}>
                 <ButtonLabel loading={loadingUpdateValues} idle="Save Key Values" busy="Saving values..." />
               </button>
+              </fieldset>
             </form>
             <div className="subcard-lite stack-form">
+              {!canApplyFlows ? <p className="muted">A valid env-approval role is required to apply flows.</p> : null}
+              <fieldset disabled={!canApplyFlows}>
               <div className="row env-input-row">
                 <input placeholder="Approved By" value={approvalBy} onChange={(event) => setApprovalBy(event.target.value)} />
-                <button type="button" className="small btn-success" onClick={() => onApplyFlow()} disabled={loadingApplyFlow}>
+                <button type="button" className="small btn-success" onClick={() => onApplyFlow()} disabled={loadingApplyFlow || !canApplyFlows}>
                   <ButtonLabel loading={loadingApplyFlow} idle="Apply All" busy="Applying..." />
                 </button>
               </div>
               <div className="env-apply-actions">
                 {selectedFlow.environments.map((environment) => (
-                  <button key={`apply-${environment.name}`} type="button" className="small btn-secondary" onClick={() => onApplyFlow(environment.name)} disabled={loadingApplyFlow}>
+                  <button key={`apply-${environment.name}`} type="button" className="small btn-secondary" onClick={() => onApplyFlow(environment.name)} disabled={loadingApplyFlow || !canApplyFlows}>
                     Apply {environment.name}
                   </button>
                 ))}
               </div>
+              </fieldset>
               {applyResult ? <p className="muted">{applyResult.message} Applied: {applyResult.applied_envs.join(', ') || 'none'}.</p> : null}
             </div>
             <div className="subcard-lite">
@@ -446,7 +527,7 @@ function EnvApprovalWorkspaceView({
                         <strong>{snapshot.snapshot_type}</strong>
                         <p className="muted">{new Date(snapshot.created_at).toLocaleString()} • {snapshot.change_reason ?? 'No reason recorded'}</p>
                       </div>
-                      <button type="button" className="small btn-secondary" onClick={() => onRollbackFlow(snapshot.id)} disabled={loadingRollbackFlow}>
+                      <button type="button" className="small btn-secondary" onClick={() => onRollbackFlow(snapshot.id)} disabled={loadingRollbackFlow || !canManageFlows}>
                         Rollback
                       </button>
                     </li>
